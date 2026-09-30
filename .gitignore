@@ -1,0 +1,12 @@
+# Data runtime pribadi — jangan di-commit
+state.json
+history.json
+bot.pid
+bot.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Env lokal
+.env
