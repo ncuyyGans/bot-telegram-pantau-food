@@ -37,16 +37,29 @@ def resolve_token(link: str) -> str | None:
     return None
 
 
-def fetch_details(token: str) -> dict | None:
-    """Fetch booking details for a share token. Returns parsed JSON or None."""
+def fetch_details(token: str) -> tuple[dict | None, str]:
+    """Fetch booking details for a share token.
+
+    Returns (data, status):
+      - "ok"    : API menjawab dan sesi pantauan ACTIVE
+      - "dead"  : link kedaluwarsa / tidak valid (API menjawab demikian / HTTP 4xx)
+      - "error" : gangguan jaringan atau HTTP 5xx (transient, layak dicoba lagi)
+    """
     url = f"{API_BASE}/api/v1/safety/sharemyride/{token}/bookingdetails?fullData=false"
     req = urllib.request.Request(url, headers={
         "User-Agent": UA, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if 400 <= e.code < 500:
+            return None, "dead"
+        return None, "error"
     except Exception:
-        return None
+        return None, "error"
+    if not data or not data.get("pass") or data.get("sessionStatus") != "ACTIVE":
+        return data, "dead"
+    return data, "ok"
 
 
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -60,11 +73,11 @@ def haversine_km(lat1, lon1, lat2, lon2) -> float:
 if __name__ == "__main__":
     tok = resolve_token("https://app.grab.com/s/sP01AQuZ")
     print("token:", tok)
-    d = fetch_details(tok)
+    d, status = fetch_details(tok)
     if d:
         drv = d.get("driver", {})
         bk = d.get("booking", {})
-        print("pass:", d.get("pass"), "| session:", d.get("sessionStatus"),
+        print("status:", status, "| pass:", (d or {}).get("pass"), "| session:", (d or {}).get("sessionStatus"),
               "| state:", bk.get("bookingState"))
         print("driver:", drv.get("name"), drv.get("rating"), drv.get("vehicleModel"),
               drv.get("vehiclePlateNumber"))

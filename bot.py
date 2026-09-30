@@ -24,6 +24,7 @@ HISTORY_MAX = 100
 
 POLL_INTERVAL = 10          # detik antar cek Grab API
 MAX_TRACKINGS = 3           # maks pantauan bersamaan
+MAX_FETCH_FAILS = 12        # 12x gagal fetch (~2 mnt) baru pantauan dihentikan
 NEAR_THRESHOLD_KM = 0.30    # ambang "driver sudah dekat"
 MAX_TRACK_MINUTES = 120     # batas durasi pantauan
 STUCK_MINUTES = 6           # ambang "driver berhenti lama" (menit)
@@ -75,9 +76,13 @@ def save_history(h):
     os.replace(tmp, HISTORY_PATH)
 
 
-def record_history(t, d):
-    """Catat pesanan yang selesai ke riwayat."""
-    drv = d.get("driver") or {}
+def record_history(t, d=None, ended="completed"):
+    """Catat pesanan yang selesai ke riwayat.
+
+    d boleh None (mis. link kedaluwarsa tanpa data terbaru) — nama driver
+    diambil dari data pantauan. ended: "completed" | "expired".
+    """
+    drv = (d.get("driver") if d else None) or {}
     try:
         rating = float(drv.get("rating"))
     except (TypeError, ValueError):
@@ -93,6 +98,7 @@ def record_history(t, d):
         "completed_ts": now,
         "duration_min": round((now - t.get("started", now)) / 60, 1),
         "eta_diff_min": round((now - eta_first) / 60, 1) if eta_first else None,
+        "ended": ended,
     }
     h = load_history()
     h.append(entry)
@@ -204,6 +210,26 @@ def completion_text(d, t=None):
     return "\n".join(s)
 
 
+def expired_text(t):
+    """Ringkasan saat link kedaluwarsa — kemungkinan pesanan sudah sampai."""
+    s = ["⌛ <b>Link pantauan kedaluwarsa</b>",
+         "Kemungkinan pesanan sudah sampai — tercatat di riwayat. 🎉", "",
+         f"🍜 {esc(t.get('merchant', '-'))} → {esc(t.get('dropoff', '-'))}",
+         f"🛵 Driver: {esc(t.get('driver', '-'))}"]
+    now = time.time()
+    dur = (now - t.get("started", now)) / 60
+    s.append(f"\n⏱ Total waktu sejak dipantau: {dur:.0f} menit.")
+    diff = (now - t["eta_first"]) / 60 if t.get("eta_first") else None
+    if diff is not None:
+        if diff <= -1:
+            s.append(f"⚡ Tiba {-diff:.0f} menit <b>lebih cepat</b> dari estimasi awal 🎉")
+        elif diff >= 1:
+            s.append(f"🐌 Telat {diff:.0f} menit dari estimasi awal.")
+        else:
+            s.append("🎯 Tiba pas sesuai estimasi awal.")
+    return "\n".join(s)
+
+
 def cleanup_tracking(s, tid, t, reason):
     try:
         if t.get("live_msg"):
@@ -236,9 +262,15 @@ def start_tracking(s, chat_id, link):
             tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
                             reply_markup=tg.reply_keyboard())
             return
-    d = fetch_details(token)
-    if not d or not d.get("pass") or d.get("sessionStatus") != "ACTIVE":
-        log(f"link fetch FAILED/inactive: token={token[:10]}... "
+    d, status = fetch_details(token)
+    if status == "error":
+        log(f"link fetch ERROR (transient): token={token[:10]}...")
+        tg.send_message(chat_id,
+                        "⚠️ Gagal menghubungi Grab. Coba tempel ulang linknya.",
+                        reply_markup=tg.reply_keyboard())
+        return
+    if status == "dead":
+        log(f"link fetch DEAD: token={token[:10]}... "
             f"got_data={bool(d)} session={(d or {}).get('sessionStatus')}")
         tg.send_message(chat_id,
                         "❌ Link tidak valid atau sesi pantauannya sudah berakhir.",
@@ -247,6 +279,16 @@ def start_tracking(s, chat_id, link):
     log(f"link OK: token={token[:10]}... state={(d.get('booking') or {}).get('bookingState')}")
     bk = d.get("booking") or {}
     if bk.get("bookingState") == "COMPLETED":
+        pk = bk.get("pickup") or {}
+        do = bk.get("dropOff") or {}
+        drv = d.get("driver") or {}
+        tt = {"merchant": pk.get("keywords") or "-",
+              "dropoff": do.get("keywords") or "-",
+              "driver": drv.get("name") or "-",
+              "started": time.time(),
+              "eta_first": (d.get("route") or {}).get("ETA")}
+        record_history(tt, d)
+        log(f"history recorded (already completed at paste): {tt['merchant']}")
         tg.send_message(chat_id, completion_text(d),
                         reply_markup=tg.reply_keyboard())
         return
@@ -262,7 +304,7 @@ def start_tracking(s, chat_id, link):
         dist0 = haversine_km(dloc0["latitude"], dloc0["longitude"],
                              doloc0["latitude"], doloc0["longitude"])
     t = {"token": token, "chat_id": chat_id, "started": time.time(),
-         "checks": 0, "last_state": bk.get("bookingState", ""),
+         "checks": 0, "fetch_fails": 0, "last_state": bk.get("bookingState", ""),
          "notified_onway": False, "notified_near": False,
          "notified_stuck": False,
          "merchant": pk.get("keywords") or "-", "dropoff": do.get("keywords") or "-",
@@ -290,13 +332,41 @@ def start_tracking(s, chat_id, link):
 
 
 def poll_tracking(s, tid, t):
-    d = fetch_details(t["token"])
+    d, status = fetch_details(t["token"])
     t["checks"] += 1
     chat_id = t["chat_id"]
-    if not d or not d.get("pass") or d.get("sessionStatus") != "ACTIVE":
-        tg.send_message(chat_id, "⌛ Sesi pantauan berakhir (link kedaluwarsa).",
-                        reply_markup=tg.reply_keyboard())
-        cleanup_tracking(s, tid, t, "session ended")
+    if status == "error":
+        # Gangguan sesaat — jangan langsung akhiri, coba lagi dulu
+        t["fetch_fails"] = t.get("fetch_fails", 0) + 1
+        save_state(s)
+        if t["fetch_fails"] >= MAX_FETCH_FAILS:
+            log(f"tracking {tid}: {MAX_FETCH_FAILS}x fetch error, giving up")
+            tg.send_message(chat_id,
+                            "⚠️ Koneksi ke Grab bermasalah berulang kali, "
+                            "pantauan dihentikan.\nRiwayat tidak tercatat karena "
+                            "status pesanan tidak diketahui — tempel ulang linknya "
+                            "kalau masih dibutuhkan.",
+                            reply_markup=tg.reply_keyboard())
+            cleanup_tracking(s, tid, t, "fetch errors")
+        return
+    t["fetch_fails"] = 0
+    if status == "dead":
+        # Link kedaluwarsa = pesanan kemungkinan besar sudah sampai
+        entry = record_history(t, d, ended="expired")
+        log(f"history recorded (link expired): {entry['merchant']} "
+            f"({entry['duration_min']} mnt)")
+        if t.get("card_msg"):
+            tg.edit_message(chat_id, t["card_msg"], expired_text(t))
+        else:
+            tg.send_message(chat_id, expired_text(t),
+                            reply_markup=tg.reply_keyboard())
+        s["reminders"].append({
+            "chat_id": chat_id,
+            "merchant": t.get("merchant", "-"),
+            "driver": t.get("driver", "-"),
+            "at": time.time() + RATING_REMINDER_MINUTES * 60})
+        save_state(s)
+        cleanup_tracking(s, tid, t, "link expired")
         return
     bk = d.get("booking") or {}
     state = bk.get("bookingState", "")

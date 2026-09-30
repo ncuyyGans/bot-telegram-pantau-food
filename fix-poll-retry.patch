@@ -1,0 +1,38 @@
+--- bot.py	2026-09-30 06:26:28.513474755 +0000
++++ /tmp/bot_patched.py	2026-09-30 07:11:48.595477444 +0000
+@@ -290,16 +290,33 @@
+ 
+ 
+ def poll_tracking(s, tid, t):
+-    d = fetch_details(t["token"])
++    # Coba beberapa kali: API Grab sering timeout sesaat ("read operation timed
++    # out"). Satu kegagalan jangan langsung dianggap sesi berakhir.
++    d = None
++    for _attempt in range(3):
++        d = fetch_details(t["token"])
++        if d and d.get("pass"):
++            break
++        time.sleep(2)
+     t["checks"] += 1
+     chat_id = t["chat_id"]
+-    if not d or not d.get("pass") or d.get("sessionStatus") != "ACTIVE":
++    if not d or not d.get("pass"):
++        log(f"tracking {tid}: fetch gagal 3x, sesi dianggap berakhir")
+         tg.send_message(chat_id, "⌛ Sesi pantauan berakhir (link kedaluwarsa).",
+                         reply_markup=tg.reply_keyboard())
+         cleanup_tracking(s, tid, t, "session ended")
+         return
+     bk = d.get("booking") or {}
+     state = bk.get("bookingState", "")
++    # Pesanan COMPLETED tetap dapat laporan selesai + pengingat rating,
++    # walau sessionStatus sudah tidak ACTIVE.
++    if d.get("sessionStatus") != "ACTIVE" and state != "COMPLETED":
++        log(f"tracking {tid}: sessionStatus={d.get('sessionStatus')} "
++            f"state={state}, sesi dianggap berakhir")
++        tg.send_message(chat_id, "⌛ Sesi pantauan berakhir (link kedaluwarsa).",
++                        reply_markup=tg.reply_keyboard())
++        cleanup_tracking(s, tid, t, "session ended")
++        return
+     drv = d.get("driver") or {}
+     do = bk.get("dropOff") or {}
+     dloc = drv.get("location") or {}
