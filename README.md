@@ -44,6 +44,10 @@ Tempel link `https://app.grab.com/s/xxxxxx` atau
      kendaraan, plat, asal → tujuan, jarak garis lurus.
    - ⭐ 10 menit setelah tiba: pengingat kasih bintang ke driver
      (bisa ON/OFF dari menu 📊 Statistik).
+   - ⌛ Link kedaluwarsa = pesanan dianggap sampai: ringkasan dikirim,
+     tercatat di riwayat (`ended: "expired"`), dan pengingat rating tetap
+     dijadwalkan. Gangguan jaringan sesaat tidak menghentikan pantauan
+     (baru berhenti setelah 12x gagal fetch ≈ 2 menit).
 5. Menu: 🛵 Lacak pesanan · 📋 Daftar pantauan (maks 3 bersamaan) ·
    📊 Statistik (riwayat pesanan selesai: total, restoran favorit,
    rata-rata durasi & rating driver — tersimpan di `history.json`).
