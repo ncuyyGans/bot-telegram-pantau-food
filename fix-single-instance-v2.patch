@@ -1,0 +1,39 @@
+--- a/bot.py
++++ b/bot.py
+@@ -8,6 +8,8 @@
+ import json
+ import os
+ import re
++import sys
++import fcntl
+ import time
+ import html as htmlmod
+ from collections import Counter
+@@ -617,6 +619,15 @@
+
+
+ def main():
++    # Cegah dua instance berjalan bersamaan: Telegram menghentikan salah satu
++    # polling getUpdates (error 409) dan pesan bisa hilang ditelan instance lain.
++    # Lock dilepas otomatis saat proses mati.
++    lockf = open(os.path.join(BASE, "bot.lock"), "w")
++    try:
++        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
++    except OSError:
++        print("another bot instance is already running; exiting", flush=True)
++        sys.exit(0)
+     s = load_state()
+     log("bot started")
+     # resume: pastikan pesan kartu/live masih valid tidak dicek; cukup lanjutkan polling
+--- a/watchdog.sh
++++ b/watchdog.sh
+@@ -2,6 +2,9 @@
+ # Watchdog: pastikan bot pantau GrabFood selalu jalan. Dipanggil cron tiap 5 menit.
+ DIR="$(cd "$(dirname "$0")" && pwd)"
+ cd "$DIR" || exit 1
++# Serialisasi watchdog: cegah dua watchdog overlap (check-then-start tidak atomik).
++exec 9>"$DIR/watchdog.lock"
++flock -n 9 || exit 0
+ if [ -f bot.pid ]; then
+   PID=$(cat bot.pid)
+   if kill -0 "$PID" 2>/dev/null && ps -p "$PID" -o args= | grep -q "bot.py"; then

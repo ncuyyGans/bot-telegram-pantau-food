@@ -25,6 +25,7 @@ HISTORY_MAX = 100
 POLL_INTERVAL = 10          # detik antar cek Grab API
 MAX_TRACKINGS = 3           # maks pantauan bersamaan
 MAX_FETCH_FAILS = 12        # 12x gagal fetch (~2 mnt) baru pantauan dihentikan
+MILESTONES = (0.25, 0.5, 0.9)  # notifikasi progres perjalanan driver
 NEAR_THRESHOLD_KM = 0.30    # ambang "driver sudah dekat"
 MAX_TRACK_MINUTES = 120     # batas durasi pantauan
 STUCK_MINUTES = 6           # ambang "driver berhenti lama" (menit)
@@ -210,6 +211,22 @@ def completion_text(d, t=None):
     return "\n".join(s)
 
 
+def milestone_text(frac, dist_km, eta_ts):
+    """Pesan notifikasi saat progres perjalanan melewati milestone."""
+    pct = int(frac * 100)
+    head = {25: "🗺️ Perjalanan 25%!",
+            50: "🗺️ Setengah jalan (50%)!",
+            90: "🗺️ Hampir sampai (90%)!"}.get(pct, f"🗺️ Perjalanan {pct}%!")
+    s = [head, f"Tinggal ±{fmt_dist(dist_km)} lagi ke tujuan."]
+    if eta_ts:
+        mins = (eta_ts - time.time()) / 60
+        if mins > 0.5:
+            s.append(f"⏱ Perkiraan tiba ±{mins:.0f} menit lagi.")
+    if pct >= 90:
+        s.append("Siap-siap ya! 🍜")
+    return "\n".join(s)
+
+
 def expired_text(t):
     """Ringkasan saat link kedaluwarsa — kemungkinan pesanan sudah sampai."""
     s = ["⌛ <b>Link pantauan kedaluwarsa</b>",
@@ -304,7 +321,8 @@ def start_tracking(s, chat_id, link):
         dist0 = haversine_km(dloc0["latitude"], dloc0["longitude"],
                              doloc0["latitude"], doloc0["longitude"])
     t = {"token": token, "chat_id": chat_id, "started": time.time(),
-         "checks": 0, "fetch_fails": 0, "last_state": bk.get("bookingState", ""),
+         "checks": 0, "fetch_fails": 0, "milestones": [],
+         "last_state": bk.get("bookingState", ""),
          "notified_onway": False, "notified_near": False,
          "notified_stuck": False,
          "merchant": pk.get("keywords") or "-", "dropoff": do.get("keywords") or "-",
@@ -421,6 +439,22 @@ def poll_tracking(s, tid, t):
     # isi jarak awal untuk progress bar bila belum ada
     if t.get("initial_dist_km") is None and dist:
         t["initial_dist_km"] = dist
+    # notifikasi milestone progres perjalanan (25% / 50% / 90%)
+    init = t.get("initial_dist_km")
+    if (dist is not None and init and init > 0.05
+            and state in ("ORDER_EXECUTING", "PICKING_UP")):
+        prog = max(0.0, min(1.0, 1 - dist / init))
+        done = set(t.get("milestones") or [])
+        crossed = [m for m in MILESTONES if prog >= m and m not in done]
+        if crossed:
+            top = max(crossed)
+            # tandai semua milestone di bawahnya juga (biar tidak spam
+            # kalau progres melonjak sekaligus)
+            t["milestones"] = sorted(m for m in MILESTONES if m <= top)
+            eta_ts = (d.get("route") or {}).get("ETA")
+            tg.send_message(chat_id, milestone_text(top, dist, eta_ts))
+            log(f"tracking {tid}: milestone {int(top * 100)}% "
+                f"(sisa {fmt_dist(dist)})")
     # driver berhenti lama saat mengantar
     if state == "ORDER_EXECUTING" and dloc.get("latitude"):
         now2 = time.time()
