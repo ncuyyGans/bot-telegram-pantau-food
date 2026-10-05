@@ -28,7 +28,7 @@ HISTORY_MAX = 100
 POLL_INTERVAL = 10          # detik antar cek Grab API
 MAX_TRACKINGS = 3           # maks pantauan bersamaan
 MAX_FETCH_FAILS = 12        # 12x gagal fetch (~2 mnt) baru pantauan dihentikan
-MILESTONES = (0.25, 0.5, 0.9)  # notifikasi progres perjalanan driver
+MILESTONES = (0.25, 0.5, 0.8)  # notifikasi progres perjalanan driver
 NEAR_THRESHOLD_KM = 0.30    # ambang "driver sudah dekat"
 MAX_TRACK_MINUTES = 120     # batas durasi pantauan
 STUCK_MINUTES = 6           # ambang "driver berhenti lama" (menit)
@@ -219,13 +219,13 @@ def milestone_text(frac, dist_km, eta_ts):
     pct = int(frac * 100)
     head = {25: "🗺️ Perjalanan 25%!",
             50: "🗺️ Setengah jalan (50%)!",
-            90: "🗺️ Hampir sampai (90%)!"}.get(pct, f"🗺️ Perjalanan {pct}%!")
+            80: "🗺️ Hampir sampai (80%)!"}.get(pct, f"🗺️ Perjalanan {pct}%!")
     s = [head, f"Tinggal ±{fmt_dist(dist_km)} lagi ke tujuan."]
     if eta_ts:
         mins = (eta_ts - time.time()) / 60
         if mins > 0.5:
             s.append(f"⏱ Perkiraan tiba ±{mins:.0f} menit lagi.")
-    if pct >= 90:
+    if pct >= 80:
         s.append("Siap-siap ya! 🍜")
     return "\n".join(s)
 
@@ -442,7 +442,7 @@ def poll_tracking(s, tid, t):
     # isi jarak awal untuk progress bar bila belum ada
     if t.get("initial_dist_km") is None and dist:
         t["initial_dist_km"] = dist
-    # notifikasi milestone progres perjalanan (25% / 50% / 90%)
+    # notifikasi milestone progres perjalanan (25% / 50% / 80%)
     init = t.get("initial_dist_km")
     if (dist is not None and init and init > 0.05
             and state in ("ORDER_EXECUTING", "PICKING_UP")):

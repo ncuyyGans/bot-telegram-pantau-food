@@ -44,7 +44,7 @@ Tempel link `https://app.grab.com/s/xxxxxx` atau
      kendaraan, plat, asal → tujuan, jarak garis lurus.
    - ⭐ 10 menit setelah tiba: pengingat kasih bintang ke driver
      (bisa ON/OFF dari menu 📊 Statistik).
-   - 🗺️ Milestone perjalanan: pesan saat progres 25% / 50% / 90%,
+   - 🗺️ Milestone perjalanan: pesan saat progres 25% / 50% / 80%,
      lengkap dengan sisa jarak & perkiraan menit tiba.
    - ⌛ Link kedaluwarsa = pesanan dianggap sampai: ringkasan dikirim,
      tercatat di riwayat (`ended: "expired"`), dan pengingat rating tetap
