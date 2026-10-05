@@ -12,6 +12,9 @@ import time
 import html as htmlmod
 from collections import Counter
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+WIB = ZoneInfo("Asia/Jakarta")  # semua waktu tampil pakai WIB
 
 import tg
 from grab_client import resolve_token, fetch_details, haversine_km
@@ -45,7 +48,7 @@ CANCELLED = {"CANCELLED_DRIVER", "CANCELLED_MAX", "CANCELLED_MERCHANT",
 
 def log(msg):
     # stdout sudah dialihkan ke bot.log oleh watchdog (nohup), jadi cukup print
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
+    print(f"{datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
 
 def load_state():
@@ -126,7 +129,7 @@ def fmt_dist(km):
 
 def fmt_eta(ts):
     try:
-        return datetime.fromtimestamp(int(ts)).strftime("%H:%M")
+        return datetime.fromtimestamp(int(ts), WIB).strftime("%H:%M")
     except Exception:
         return "-"
 
@@ -535,7 +538,7 @@ def stats_body_and_kb(s):
         lines.append(f"• {esc(name)} ({c}x)")
     lines += ["", "<b>Terakhir:</b>"]
     for x in h[-5:][::-1]:
-        dt = datetime.fromtimestamp(x["completed_ts"]).strftime("%d/%m %H:%M")
+        dt = datetime.fromtimestamp(x["completed_ts"], WIB).strftime("%d/%m %H:%M")
         lines.append(f"• {esc(x['merchant'])} — {dt}")
     return ("\n".join(lines), kb)
 

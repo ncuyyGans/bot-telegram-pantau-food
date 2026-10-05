@@ -4,6 +4,8 @@ import time
 import urllib.request
 import urllib.error
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 API_BASE = "https://api.grab.com"
 UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
@@ -87,4 +89,5 @@ if __name__ == "__main__":
         print("dropoff:", (bk.get("dropOff") or {}).get("keywords"))
         print("title:", (d.get("messageStatus") or {}).get("title"))
         print("ETA:", d.get("route", {}).get("ETA"),
-              time.strftime("%H:%M", time.localtime(d.get("route", {}).get("ETA") or 0)))
+              datetime.fromtimestamp(d.get("route", {}).get("ETA") or 0,
+                                     ZoneInfo("Asia/Jakarta")).strftime("%H:%M WIB"))
