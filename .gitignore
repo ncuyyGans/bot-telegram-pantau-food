@@ -10,3 +10,6 @@ __pycache__/
 
 # Env lokal
 .env
+
+# Log runtime watchdog
+watchdog-runs.log

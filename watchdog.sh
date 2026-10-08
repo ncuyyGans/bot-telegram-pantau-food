@@ -4,7 +4,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR" || exit 1
 if [ -f bot.pid ]; then
   PID=$(cat bot.pid)
-  if kill -0 "$PID" 2>/dev/null && ps -p "$PID" -o args= | grep -q "bot.py"; then
+  # Pola ketat: cocok "python3 bot.py" (boleh dengan path), bukan "otpbot.py"
+  # (grep substring "bot.py" bisa false-positive bila PID dipakai ulang proses lain).
+  if kill -0 "$PID" 2>/dev/null && ps -p "$PID" -o args= | grep -qE "(^|[[:space:]])python3[[:space:]]+([^[:space:]]*/)?bot\.py([[:space:]]|$)"; then
     exit 0
   fi
 fi
