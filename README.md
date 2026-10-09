@@ -118,3 +118,10 @@ notifikasi.
 - Webhook lama (`notifikasi-order-grabfood.vercel.app`, rusak/404) dihapus via
   `deleteWebhook` pada 2026-09-29 agar long polling bisa jalan.
 - Owner = chat pertama yang `/start` (dikunci di `state.json`).
+- Ikon platform = **custom emoji** logo GrabFood/ShopeeFood (set
+  `pantaufood_by_grabnotifsy_bot`, tipe `custom_emoji`, dibuat via
+  `createNewStickerSet` dari gambar user 2026-10-09; owner set harus akun
+  manusia). ID tersimpan di `emoji.json`; `rich()` di `bot.py` mengubah
+  HTML → entities Telegram dan menempelkan custom emoji di tiap 🟧/🛵.
+  `send_html`/`edit_html` memakainya otomatis — entities & parse_mode tidak
+  bisa digabung, jadi pesan berlogo dikirim full-entities.
