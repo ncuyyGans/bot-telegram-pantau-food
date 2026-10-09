@@ -175,6 +175,22 @@ def driver_loc(driver):
     return _latlng((driver or {}).get("location") or {})
 
 
+def pickup_geo(data):
+    """Titik pickup (resto) dari union_delivery — fallback posisi driver
+    seperti web app (De.location || unionDelivery.deliveryOrder.geoTracking.pickupGeo)."""
+    o = order_of(data)
+    for ukey, dkey, gkey in (("unionDelivery", "deliveryOrder", "geoTracking"),
+                             ("union_delivery", "delivery_order", "geo_tracking")):
+        ud = (data or {}).get(ukey) or o.get(ukey) or {}
+        if not isinstance(ud, dict):
+            continue
+        gt = (ud.get(dkey) or {}).get(gkey) or {}
+        ll = _latlng(gt.get("pickup_geo") or gt.get("pickupGeo") or {})
+        if ll:
+            return ll
+    return None
+
+
 def store_loc(order):
     return _latlng((order.get("store") or {}).get("location") or {})
 

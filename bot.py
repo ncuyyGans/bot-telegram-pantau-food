@@ -293,8 +293,12 @@ def shopee_card_text(d, t):
                   f"👤 {esc(dname)}" + (f" (⭐{rating})" if rating else ""),
                   f"🏍 {esc(veh or '-')} · <code>{esc(plate or '-')}</code>"]
         if phone:
-            lines.append(f"📞 <code>{esc(phone)}</code>")
-    dloc = sp.driver_loc(drv)
+            wa = re.sub(r"\D", "", phone)
+            if wa.startswith("0"):
+                wa = "62" + wa[1:]
+            lines.append(f'📞 <a href="https://wa.me/{wa}">{esc(phone)}</a> '
+                         f'<i>(ketuk untuk chat WA)</i>')
+    dloc = sp.driver_loc(drv) or (sp.pickup_geo(d) if dname else None)
     dest = sp.dest_loc(order)
     if dloc and dest:
         dist = haversine_km(dloc[0], dloc[1], dest[0], dest[1])
@@ -535,7 +539,8 @@ def start_shopee_tracking(s, chat_id, link):
     r1 = tg.send_message(chat_id, shopee_card_text(d, t), reply_markup=kb)
     if r1.get("ok"):
         t["card_msg"] = r1["result"]["message_id"]
-    dloc = sp.driver_loc(sp.driver_of(d))
+    _drv0 = sp.driver_of(d)
+    dloc = sp.driver_loc(_drv0) or (sp.pickup_geo(d) if sp.driver_name(_drv0) else None)
     if dloc:
         r2 = tg.send_location(chat_id, dloc[0], dloc[1])
         if r2.get("ok"):
@@ -640,7 +645,8 @@ def poll_shopee_tracking(s, tid, t):
         t["notified_enroute"] = True
         tg.send_message(chat_id, "🔔 Driver ShopeeFood sedang menuju lokasimu. 🟧")
 
-    dloc = sp.driver_loc(drv)
+    dloc_real = sp.driver_loc(drv)
+    dloc = dloc_real or (sp.pickup_geo(d) if dname else None)
     dest = sp.dest_loc(order)
     dist = None
     if dloc and dest:
@@ -671,8 +677,9 @@ def poll_shopee_tracking(s, tid, t):
             tg.send_message(chat_id, milestone_text(top, dist, hi))
             log(f"tracking {tid}: milestone {int(top * 100)}% "
                 f"(sisa {fmt_dist(dist)})")
-    # driver berhenti lama saat mengantar
-    if st in sp.DELIVERY_STATES and dloc:
+    # driver berhenti lama saat mengantar (hanya bila lokasi live asli ada,
+    # bukan pin fallback resto — biar tidak false alarm saat baru pickup)
+    if st in sp.DELIVERY_STATES and dloc_real:
         now2 = time.time()
         lp = t.get("last_driver_pos")
         moved = True
