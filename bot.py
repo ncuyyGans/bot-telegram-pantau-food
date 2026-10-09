@@ -35,6 +35,7 @@ MAX_TRACK_MINUTES = 120     # batas durasi pantauan
 STUCK_MINUTES = 6           # ambang "driver berhenti lama" (menit)
 STUCK_DIST_KM = 0.10        # dianggap diam bila bergerak < 100 m
 RATING_REMINDER_MINUTES = 10  # jeda pengingat rating setelah selesai
+LINK_DEAD_GRACE_MINUTES = 30  # ShopeeFood: jeda menunggu link baru bila kode share mati (rotasi)
 
 STATE_LABEL = {
     "ORDER_IN_PREPARE": "disiapkan restoran",
@@ -482,7 +483,26 @@ def start_shopee_tracking(s, chat_id, link):
     order_id, code = parsed
     for tid, t in active.items():
         if t.get("platform") == "shopee" and t.get("order_id") == order_id:
-            tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
+            if t.get("code") == code:
+                tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
+                                reply_markup=tg.reply_keyboard())
+                return
+            # ShopeeFood merotasi kode share — update pantauan yang sudah ada
+            t["code"] = code
+            t["tracker_url"] = sp.tracker_url(order_id, code)
+            t["fetch_fails"] = 0
+            t.pop("link_dead_since", None)
+            t.pop("link_dead_notified", None)
+            save_state(s)
+            log(f"tracking {tid}: shopee share code rotated, updated")
+            d2, s2 = sp.fetch_details(order_id, code)
+            if s2 == "ok" and t.get("card_msg"):
+                tg.edit_message(chat_id, t["card_msg"], shopee_card_text(d2, t),
+                                reply_markup=tg.inline_stop_url(
+                                    tid, t["tracker_url"], "📍 Buka di ShopeeFood"))
+            tg.send_message(chat_id,
+                            "🔄 Link share ShopeeFood diperbarui — pantauan dilanjutkan "
+                            "dengan data terbaru. 🟧",
                             reply_markup=tg.reply_keyboard())
             return
     d, status = sp.fetch_details(order_id, code)
@@ -573,22 +593,42 @@ def poll_shopee_tracking(s, tid, t):
         return
     t["fetch_fails"] = 0
     if status == "dead":
-        # Link kedaluwarsa = pesanan kemungkinan besar sudah sampai
-        entry = record_history(t, d, ended="expired")
-        log(f"history recorded (shopee link expired): {entry['merchant']} "
-            f"({entry['duration_min']} mnt)")
-        if t.get("card_msg"):
-            tg.edit_message(chat_id, t["card_msg"], shopee_expired_text(t))
-        else:
-            tg.send_message(chat_id, shopee_expired_text(t),
+        # Link mati — bisa karena pesanan selesai, BISA juga karena ShopeeFood
+        # merotasi kode share. Beri jeda menunggu link baru ditempel user.
+        now = time.time()
+        if not t.get("link_dead_since"):
+            t["link_dead_since"] = now
+            save_state(s)
+        if not t.get("link_dead_notified"):
+            t["link_dead_notified"] = True
+            tg.send_message(chat_id,
+                            "⚠️ Link share ShopeeFood tidak bisa diakses lagi.\n\n"
+                            "Kalau pesananmu <b>belum sampai</b>, kemungkinan ShopeeFood "
+                            "mengganti link share-nya — tempel link <b>terbaru</b> dari "
+                            "aplikasi ya, pantauan dilanjutkan otomatis. 🟧\n"
+                            f"<i>Pantauan dijeda maksimal {LINK_DEAD_GRACE_MINUTES} menit "
+                            "menunggu link baru.</i>",
                             reply_markup=tg.reply_keyboard())
-        s["reminders"].append({
-            "chat_id": chat_id, "platform": "shopee",
-            "merchant": t.get("merchant", "-"),
-            "driver": t.get("driver", "-"),
-            "at": time.time() + RATING_REMINDER_MINUTES * 60})
-        save_state(s)
-        cleanup_tracking(s, tid, t, "link expired")
+            save_state(s)
+            log(f"tracking {tid}: shopee link dead, grace period started")
+        if (now - t["link_dead_since"] > LINK_DEAD_GRACE_MINUTES * 60
+                or now - t["started"] > MAX_TRACK_MINUTES * 60):
+            # Benar-benar berakhir — catat riwayat
+            entry = record_history(t, d, ended="expired")
+            log(f"history recorded (shopee link expired): {entry['merchant']} "
+                f"({entry['duration_min']} mnt)")
+            if t.get("card_msg"):
+                tg.edit_message(chat_id, t["card_msg"], shopee_expired_text(t))
+            else:
+                tg.send_message(chat_id, shopee_expired_text(t),
+                                reply_markup=tg.reply_keyboard())
+            s["reminders"].append({
+                "chat_id": chat_id, "platform": "shopee",
+                "merchant": t.get("merchant", "-"),
+                "driver": t.get("driver", "-"),
+                "at": time.time() + RATING_REMINDER_MINUTES * 60})
+            save_state(s)
+            cleanup_tracking(s, tid, t, "link expired")
         return
     order = sp.order_of(d)
     st = sp.status_code(order)

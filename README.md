@@ -101,6 +101,12 @@ notifikasi.
   nomor HP driver memang dikirim lewat link share ini (halaman web-nya
   sendiri tidak menampilkannya, tapi bot menampilkannya di kartu).
   Lokasi live driver: `driver.location` (muncul belakangan).
+- Kode share **dirotasi** ShopeeFood (diamati 2026-10-09: suffix `=<timestamp>`
+  berubah tiap ~30 menit / tiap buka aplikasi; kode lama tetap menjawab tapi
+  datanya bisa basi). Bot menanganinya: tempel link baru untuk orderId yang
+  sedang dipantau → kode pantauan di-update in-place (bukan duplikat);
+  bila kode mati total, pantauan dijeda 30 menit menunggu link baru
+  (`LINK_DEAD_GRACE_MINUTES`) sebelum dicatat kedaluwarsa.
 - Halaman share juga menampilkan nama + no. HP pemesan — bot tidak
   menampilkannya di kartu (discretion), hanya dipakai internal.
 
