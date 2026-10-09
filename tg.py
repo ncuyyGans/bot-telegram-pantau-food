@@ -62,17 +62,27 @@ def api(method, payload=None, timeout=30, _retry=True):
 
 
 def send_message(chat_id, text, reply_markup=None, parse_mode="HTML",
-                 disable_web_page_preview=True):
-    p = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode,
+                 disable_web_page_preview=True, entities=None):
+    p = {"chat_id": chat_id, "text": text,
          "disable_web_page_preview": disable_web_page_preview}
+    if entities is not None:
+        # entities & parse_mode tidak bisa dipakai bersamaan — entities menang
+        p["entities"] = entities
+    else:
+        p["parse_mode"] = parse_mode
     if reply_markup:
         p["reply_markup"] = reply_markup
     return api("sendMessage", p, timeout=20)
 
 
-def edit_message(chat_id, msg_id, text, reply_markup=None, parse_mode="HTML"):
+def edit_message(chat_id, msg_id, text, reply_markup=None, parse_mode="HTML",
+                 entities=None):
     p = {"chat_id": chat_id, "message_id": msg_id, "text": text,
-         "parse_mode": parse_mode, "disable_web_page_preview": True}
+         "disable_web_page_preview": True}
+    if entities is not None:
+        p["entities"] = entities
+    else:
+        p["parse_mode"] = parse_mode
     if reply_markup is not None:
         p["reply_markup"] = reply_markup
     return api("editMessageText", p, timeout=20)

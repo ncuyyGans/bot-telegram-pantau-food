@@ -1,0 +1,10 @@
+{
+ "shopeefood": {
+  "custom_emoji_id": "6217637606809674208",
+  "fallback": "🟧"
+ },
+ "grabfood": {
+  "custom_emoji_id": "6217535983588482700",
+  "fallback": "🛵"
+ }
+}

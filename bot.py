@@ -134,6 +134,98 @@ def esc(t):
     return htmlmod.escape(str(t or "-"))
 
 
+# --- Custom emoji platform (logo GrabFood/ShopeeFood sebagai emotikon) ---
+# emoji.json dibuat dari gambar user via createNewStickerSet (custom_emoji).
+def _load_custom_emoji():
+    try:
+        with open(os.path.join(BASE, "emoji.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        return {v["fallback"]: v["custom_emoji_id"] for v in d.values()
+                if v.get("custom_emoji_id")}
+    except (OSError, ValueError, KeyError, AttributeError):
+        return {}
+
+
+CUSTOM_EMOJI = _load_custom_emoji()
+
+_TAG_RE = re.compile(r'<(/?)(b|i|code|a)(?:\s+href="([^"]*)")?>')
+_TAG_ENTITY = {"b": "bold", "i": "italic", "code": "code"}
+
+
+def _u16len(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def rich(html):
+    """Ubah HTML sederhana (b/i/code/a) jadi (text, entities Telegram).
+
+    Karakter ikon platform (🟧/🛵) otomatis diganti custom emoji logo bila
+    emoji.json tersedia. Offset entities dalam satuan UTF-16.
+    """
+    parts, entities, stack, pos, last = [], [], [], 0, 0
+    for m in _TAG_RE.finditer(html):
+        chunk = htmlmod.unescape(html[last:m.start()])
+        parts.append(chunk)
+        pos += _u16len(chunk)
+        closing, tag, href = m.group(1), m.group(2), m.group(3)
+        if not closing:
+            stack.append((tag, pos, href))
+        else:
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i][0] == tag:
+                    _, start, href0 = stack.pop(i)
+                    if pos > start:
+                        if tag == "a":
+                            entities.append({"type": "text_link", "offset": start,
+                                             "length": pos - start,
+                                             "url": href0 or ""})
+                        else:
+                            entities.append({"type": _TAG_ENTITY[tag],
+                                             "offset": start,
+                                             "length": pos - start})
+                    break
+        last = m.end()
+    tail = htmlmod.unescape(html[last:])
+    parts.append(tail)
+    text = "".join(parts)
+    if CUSTOM_EMOJI:
+        u16 = text.encode("utf-16-le")
+        for ch, cid in CUSTOM_EMOJI.items():
+            ch16 = ch.encode("utf-16-le")
+            at = 0
+            while True:
+                idx = u16.find(ch16, at)
+                if idx < 0:
+                    break
+                entities.append({"type": "custom_emoji", "offset": idx // 2,
+                                 "length": len(ch16) // 2,
+                                 "custom_emoji_id": cid})
+                at = idx + len(ch16)
+    return text, entities
+
+
+def _has_custom_emoji(entities):
+    return any(e.get("type") == "custom_emoji" for e in entities)
+
+
+def send_html(chat_id, html, reply_markup=None, **kw):
+    """Kirim pesan HTML; otomatis pakai custom emoji logo bila ada ikon platform."""
+    text, entities = rich(html)
+    if _has_custom_emoji(entities):
+        return tg.send_message(chat_id, text, reply_markup=reply_markup,
+                               entities=entities, **kw)
+    return tg.send_message(chat_id, html, reply_markup=reply_markup, **kw)
+
+
+def edit_html(chat_id, msg_id, html, reply_markup=None):
+    """Edit pesan HTML; otomatis pakai custom emoji logo bila ada ikon platform."""
+    text, entities = rich(html)
+    if _has_custom_emoji(entities):
+        return tg.edit_message(chat_id, msg_id, text, reply_markup=reply_markup,
+                               entities=entities)
+    return tg.edit_message(chat_id, msg_id, html, reply_markup=reply_markup)
+
+
 def fmt_dist(km):
     if km < 1:
         return f"{int(km * 1000)} m"
@@ -375,7 +467,7 @@ def start_tracking(s, chat_id, link):
 def start_grab_tracking(s, chat_id, link):
     active = s["trackings"]
     if len(active) >= MAX_TRACKINGS:
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         f"⚠️ Maksimal {MAX_TRACKINGS} pesanan dipantau sekaligus. "
                         "Hentikan salah satu dulu lewat 📋 Daftar pantauan.",
                         reply_markup=tg.reply_keyboard())
@@ -383,27 +475,27 @@ def start_grab_tracking(s, chat_id, link):
     token = resolve_token(link)
     if not token:
         log(f"link resolve FAILED: {link[:70]}")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "❌ Link tidak dikenali. Tempel link share dari aplikasi Grab, "
                         "contoh:\n<code>https://app.grab.com/s/xxxxxx</code>",
                         reply_markup=tg.reply_keyboard())
         return
     for tid, t in active.items():
         if t.get("token") == token:
-            tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
+            send_html(chat_id, "ℹ️ Link ini sedang dipantau.",
                             reply_markup=tg.reply_keyboard())
             return
     d, status = fetch_details(token)
     if status == "error":
         log(f"link fetch ERROR (transient): token={token[:10]}...")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "⚠️ Gagal menghubungi Grab. Coba tempel ulang linknya.",
                         reply_markup=tg.reply_keyboard())
         return
     if status == "dead":
         log(f"link fetch DEAD: token={token[:10]}... "
             f"got_data={bool(d)} session={(d or {}).get('sessionStatus')}")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "❌ Link tidak valid atau sesi pantauannya sudah berakhir.",
                         reply_markup=tg.reply_keyboard())
         return
@@ -420,7 +512,7 @@ def start_grab_tracking(s, chat_id, link):
               "eta_first": (d.get("route") or {}).get("ETA")}
         record_history(tt, d)
         log(f"history recorded (already completed at paste): {tt['merchant']}")
-        tg.send_message(chat_id, completion_text(d),
+        send_html(chat_id, completion_text(d),
                         reply_markup=tg.reply_keyboard())
         return
     tid = str(s["next_id"])
@@ -447,7 +539,7 @@ def start_grab_tracking(s, chat_id, link):
     s["trackings"][tid] = t
     save_state(s)
     kb = tg.inline_stop(tid, token)
-    r1 = tg.send_message(chat_id, card_text(d, t), reply_markup=kb)
+    r1 = send_html(chat_id, card_text(d, t), reply_markup=kb)
     if r1.get("ok"):
         t["card_msg"] = r1["result"]["message_id"]
     dloc = drv.get("location") or {}
@@ -456,7 +548,7 @@ def start_grab_tracking(s, chat_id, link):
         if r2.get("ok"):
             t["live_msg"] = r2["result"]["message_id"]
     save_state(s)
-    tg.send_message(chat_id,
+    send_html(chat_id,
                     f"👀 Mulai memantau <b>{esc(t['merchant'])}</b>. "
                     "Kartu di atas memperbarui diri sendiri.",
                     reply_markup=tg.reply_keyboard())
@@ -466,7 +558,7 @@ def start_grab_tracking(s, chat_id, link):
 def start_shopee_tracking(s, chat_id, link):
     active = s["trackings"]
     if len(active) >= MAX_TRACKINGS:
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         f"⚠️ Maksimal {MAX_TRACKINGS} pesanan dipantau sekaligus. "
                         "Hentikan salah satu dulu lewat 📋 Daftar pantauan.",
                         reply_markup=tg.reply_keyboard())
@@ -474,7 +566,7 @@ def start_shopee_tracking(s, chat_id, link):
     parsed = sp.parse_link(link)
     if not parsed:
         log(f"shopee link parse FAILED: {link[:70]}")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "❌ Link ShopeeFood tidak dikenali. Tempel link tracker dari "
                         "aplikasi ShopeeFood, contoh:\n"
                         "<code>https://www.shopeefood.co.id/tracker?code=...&amp;orderId=...</code>",
@@ -484,7 +576,7 @@ def start_shopee_tracking(s, chat_id, link):
     for tid, t in active.items():
         if t.get("platform") == "shopee" and t.get("order_id") == order_id:
             if t.get("code") == code:
-                tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
+                send_html(chat_id, "ℹ️ Link ini sedang dipantau.",
                                 reply_markup=tg.reply_keyboard())
                 return
             # ShopeeFood merotasi kode share — update pantauan yang sudah ada
@@ -497,10 +589,10 @@ def start_shopee_tracking(s, chat_id, link):
             log(f"tracking {tid}: shopee share code rotated, updated")
             d2, s2 = sp.fetch_details(order_id, code)
             if s2 == "ok" and t.get("card_msg"):
-                tg.edit_message(chat_id, t["card_msg"], shopee_card_text(d2, t),
+                edit_html(chat_id, t["card_msg"], shopee_card_text(d2, t),
                                 reply_markup=tg.inline_stop_url(
                                     tid, t["tracker_url"], "📍 Buka di ShopeeFood"))
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             "🔄 Link share ShopeeFood diperbarui — pantauan dilanjutkan "
                             "dengan data terbaru. 🟧",
                             reply_markup=tg.reply_keyboard())
@@ -508,13 +600,13 @@ def start_shopee_tracking(s, chat_id, link):
     d, status = sp.fetch_details(order_id, code)
     if status == "error":
         log(f"shopee link fetch ERROR (transient): order={order_id}")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "⚠️ Gagal menghubungi ShopeeFood. Coba tempel ulang linknya.",
                         reply_markup=tg.reply_keyboard())
         return
     if status == "dead":
         log(f"shopee link fetch DEAD: order={order_id}")
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "❌ Link tidak valid atau sesi pantauannya sudah berakhir.",
                         reply_markup=tg.reply_keyboard())
         return
@@ -532,11 +624,11 @@ def start_shopee_tracking(s, chat_id, link):
     if sp.is_done(order):
         record_history(tt, d)
         log(f"history recorded (shopee already done at paste): {merchant}")
-        tg.send_message(chat_id, shopee_completion_text(d),
+        send_html(chat_id, shopee_completion_text(d),
                         reply_markup=tg.reply_keyboard())
         return
     if sp.is_cancelled(order):
-        tg.send_message(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
+        send_html(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
                         reply_markup=tg.reply_keyboard())
         return
     tid = str(s["next_id"])
@@ -556,7 +648,7 @@ def start_shopee_tracking(s, chat_id, link):
     s["trackings"][tid] = t
     save_state(s)
     kb = tg.inline_stop_url(tid, t["tracker_url"], "📍 Buka di ShopeeFood")
-    r1 = tg.send_message(chat_id, shopee_card_text(d, t), reply_markup=kb)
+    r1 = send_html(chat_id, shopee_card_text(d, t), reply_markup=kb)
     if r1.get("ok"):
         t["card_msg"] = r1["result"]["message_id"]
     _drv0 = sp.driver_of(d)
@@ -566,7 +658,7 @@ def start_shopee_tracking(s, chat_id, link):
         if r2.get("ok"):
             t["live_msg"] = r2["result"]["message_id"]
     save_state(s)
-    tg.send_message(chat_id,
+    send_html(chat_id,
                     f"👀 Mulai memantau <b>{esc(merchant)}</b> (ShopeeFood). "
                     "Kartu di atas memperbarui diri sendiri.",
                     reply_markup=tg.reply_keyboard())
@@ -583,7 +675,7 @@ def poll_shopee_tracking(s, tid, t):
         save_state(s)
         if t["fetch_fails"] >= MAX_FETCH_FAILS:
             log(f"tracking {tid}: {MAX_FETCH_FAILS}x fetch error, giving up")
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             "⚠️ Koneksi ke ShopeeFood bermasalah berulang kali, "
                             "pantauan dihentikan.\nRiwayat tidak tercatat karena "
                             "status pesanan tidak diketahui — tempel ulang linknya "
@@ -601,7 +693,7 @@ def poll_shopee_tracking(s, tid, t):
             save_state(s)
         if not t.get("link_dead_notified"):
             t["link_dead_notified"] = True
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             "⚠️ Link share ShopeeFood tidak bisa diakses lagi.\n\n"
                             "Kalau pesananmu <b>belum sampai</b>, kemungkinan ShopeeFood "
                             "mengganti link share-nya — tempel link <b>terbaru</b> dari "
@@ -618,9 +710,9 @@ def poll_shopee_tracking(s, tid, t):
             log(f"history recorded (shopee link expired): {entry['merchant']} "
                 f"({entry['duration_min']} mnt)")
             if t.get("card_msg"):
-                tg.edit_message(chat_id, t["card_msg"], shopee_expired_text(t))
+                edit_html(chat_id, t["card_msg"], shopee_expired_text(t))
             else:
-                tg.send_message(chat_id, shopee_expired_text(t),
+                send_html(chat_id, shopee_expired_text(t),
                                 reply_markup=tg.reply_keyboard())
             s["reminders"].append({
                 "chat_id": chat_id, "platform": "shopee",
@@ -650,9 +742,9 @@ def poll_shopee_tracking(s, tid, t):
         entry = record_history(t, d)
         log(f"history recorded (shopee): {entry['merchant']} ({entry['duration_min']} mnt)")
         if t.get("card_msg"):
-            tg.edit_message(chat_id, t["card_msg"], shopee_completion_text(d, t))
+            edit_html(chat_id, t["card_msg"], shopee_completion_text(d, t))
         else:
-            tg.send_message(chat_id, shopee_completion_text(d, t),
+            send_html(chat_id, shopee_completion_text(d, t),
                             reply_markup=tg.reply_keyboard())
         s["reminders"].append({
             "chat_id": chat_id, "platform": "shopee",
@@ -663,12 +755,12 @@ def poll_shopee_tracking(s, tid, t):
         cleanup_tracking(s, tid, t, "completed")
         return
     if sp.is_cancelled(order):
-        tg.send_message(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
+        send_html(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
                         reply_markup=tg.reply_keyboard())
         cleanup_tracking(s, tid, t, "cancelled")
         return
     if time.time() - t["started"] > MAX_TRACK_MINUTES * 60:
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "⌛ Pantauan dihentikan otomatis (melebihi 2 jam).",
                         reply_markup=tg.reply_keyboard())
         cleanup_tracking(s, tid, t, "timeout")
@@ -677,13 +769,13 @@ def poll_shopee_tracking(s, tid, t):
     # transisi status khas ShopeeFood
     if st == 400 and not t.get("notified_assigned"):
         t["notified_assigned"] = True
-        tg.send_message(chat_id, "🔔 Driver ShopeeFood sudah ditugaskan. 🟧")
+        send_html(chat_id, "🔔 Driver ShopeeFood sudah ditugaskan. 🟧")
     if st == 430 and not t.get("notified_picked"):
         t["notified_picked"] = True
-        tg.send_message(chat_id, "🔔 Pesananmu sudah diambil driver ShopeeFood.")
+        send_html(chat_id, "🔔 Pesananmu sudah diambil driver ShopeeFood.")
     if st == 431 and not t.get("notified_enroute"):
         t["notified_enroute"] = True
-        tg.send_message(chat_id, "🔔 Driver ShopeeFood sedang menuju lokasimu. 🟧")
+        send_html(chat_id, "🔔 Driver ShopeeFood sedang menuju lokasimu. 🟧")
 
     dloc_real = sp.driver_loc(drv)
     dloc = dloc_real or (sp.pickup_geo(d) if dname else None)
@@ -700,7 +792,7 @@ def poll_shopee_tracking(s, tid, t):
     if (not t["notified_near"] and dist is not None
             and dist <= NEAR_THRESHOLD_KM and st in sp.DELIVERY_STATES):
         t["notified_near"] = True
-        tg.send_message(
+        send_html(
             chat_id,
             f"🟧 Driver ShopeeFood sudah dekat — tinggal sekitar {int(dist * 1000)} meter lagi.")
     # notifikasi milestone progres perjalanan (25% / 50% / 80%)
@@ -714,7 +806,7 @@ def poll_shopee_tracking(s, tid, t):
             top = max(crossed)
             t["milestones"] = sorted(m for m in MILESTONES if m <= top)
             _lo, hi = sp.eta_range(order)
-            tg.send_message(chat_id, milestone_text(top, dist, hi))
+            send_html(chat_id, milestone_text(top, dist, hi))
             log(f"tracking {tid}: milestone {int(top * 100)}% "
                 f"(sisa {fmt_dist(dist)})")
     # driver berhenti lama saat mengantar (hanya bila lokasi live asli ada,
@@ -731,7 +823,7 @@ def poll_shopee_tracking(s, tid, t):
         elif (not t.get("notified_stuck")
                 and now2 - (t.get("last_move_ts") or t["started"]) >= STUCK_MINUTES * 60):
             t["notified_stuck"] = True
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             f"🚦 {esc(t.get('driver', 'Driver'))} belum bergerak ~{STUCK_MINUTES} menit "
                             "— mungkin macet atau mampir sebentar.")
     t["last_state"] = st
@@ -750,7 +842,7 @@ def poll_shopee_tracking(s, tid, t):
                 t["live_msg"] = r2["result"]["message_id"]
     # update kartu
     if t.get("card_msg"):
-        tg.edit_message(chat_id, t["card_msg"], shopee_card_text(d, t),
+        edit_html(chat_id, t["card_msg"], shopee_card_text(d, t),
                         reply_markup=tg.inline_stop_url(
                             tid, t["tracker_url"], "📍 Buka di ShopeeFood"))
     save_state(s)
@@ -766,7 +858,7 @@ def poll_tracking(s, tid, t):
         save_state(s)
         if t["fetch_fails"] >= MAX_FETCH_FAILS:
             log(f"tracking {tid}: {MAX_FETCH_FAILS}x fetch error, giving up")
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             "⚠️ Koneksi ke Grab bermasalah berulang kali, "
                             "pantauan dihentikan.\nRiwayat tidak tercatat karena "
                             "status pesanan tidak diketahui — tempel ulang linknya "
@@ -781,9 +873,9 @@ def poll_tracking(s, tid, t):
         log(f"history recorded (link expired): {entry['merchant']} "
             f"({entry['duration_min']} mnt)")
         if t.get("card_msg"):
-            tg.edit_message(chat_id, t["card_msg"], expired_text(t))
+            edit_html(chat_id, t["card_msg"], expired_text(t))
         else:
-            tg.send_message(chat_id, expired_text(t),
+            send_html(chat_id, expired_text(t),
                             reply_markup=tg.reply_keyboard())
         s["reminders"].append({
             "chat_id": chat_id, "platform": "grab",
@@ -804,9 +896,9 @@ def poll_tracking(s, tid, t):
         entry = record_history(t, d)
         log(f"history recorded: {entry['merchant']} ({entry['duration_min']} mnt)")
         if t.get("card_msg"):
-            tg.edit_message(chat_id, t["card_msg"], completion_text(d, t))
+            edit_html(chat_id, t["card_msg"], completion_text(d, t))
         else:
-            tg.send_message(chat_id, completion_text(d, t),
+            send_html(chat_id, completion_text(d, t),
                             reply_markup=tg.reply_keyboard())
         s["reminders"].append({
             "chat_id": chat_id, "platform": "grab",
@@ -817,12 +909,12 @@ def poll_tracking(s, tid, t):
         cleanup_tracking(s, tid, t, "completed")
         return
     if state in CANCELLED:
-        tg.send_message(chat_id, "🚫 Pesanan dibatalkan.",
+        send_html(chat_id, "🚫 Pesanan dibatalkan.",
                         reply_markup=tg.reply_keyboard())
         cleanup_tracking(s, tid, t, f"cancelled {state}")
         return
     if time.time() - t["started"] > MAX_TRACK_MINUTES * 60:
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "⌛ Pantauan dihentikan otomatis (melebihi 2 jam).",
                         reply_markup=tg.reply_keyboard())
         cleanup_tracking(s, tid, t, "timeout")
@@ -832,7 +924,7 @@ def poll_tracking(s, tid, t):
     if (not t["notified_onway"] and t["last_state"] in ("ORDER_IN_PREPARE", "")
             and state in ("ORDER_EXECUTING", "PICKING_UP")):
         t["notified_onway"] = True
-        tg.send_message(chat_id, "🔔 Driver sudah jalan membawa pesananmu.")
+        send_html(chat_id, "🔔 Driver sudah jalan membawa pesananmu.")
     # driver dekat tujuan
     dist = None
     if dloc.get("latitude") and doloc.get("latitude"):
@@ -840,7 +932,7 @@ def poll_tracking(s, tid, t):
                             doloc["latitude"], doloc["longitude"])
     if (not t["notified_near"] and dist is not None and dist <= NEAR_THRESHOLD_KM):
         t["notified_near"] = True
-        tg.send_message(
+        send_html(
             chat_id,
             f"🛵 Driver sudah dekat — tinggal sekitar {int(dist * 1000)} meter lagi ke tujuan.")
     # isi jarak awal untuk progress bar bila belum ada
@@ -859,7 +951,7 @@ def poll_tracking(s, tid, t):
             # kalau progres melonjak sekaligus)
             t["milestones"] = sorted(m for m in MILESTONES if m <= top)
             eta_ts = (d.get("route") or {}).get("ETA")
-            tg.send_message(chat_id, milestone_text(top, dist, eta_ts))
+            send_html(chat_id, milestone_text(top, dist, eta_ts))
             log(f"tracking {tid}: milestone {int(top * 100)}% "
                 f"(sisa {fmt_dist(dist)})")
     # driver berhenti lama saat mengantar
@@ -876,7 +968,7 @@ def poll_tracking(s, tid, t):
         elif (not t.get("notified_stuck")
                 and now2 - (t.get("last_move_ts") or t["started"]) >= STUCK_MINUTES * 60):
             t["notified_stuck"] = True
-            tg.send_message(chat_id,
+            send_html(chat_id,
                             f"🚦 {esc(t.get('driver', 'Driver'))} belum bergerak ~{STUCK_MINUTES} menit "
                             "— mungkin macet atau mampir sebentar.")
     t["last_state"] = state
@@ -896,7 +988,7 @@ def poll_tracking(s, tid, t):
                 t["live_msg"] = r2["result"]["message_id"]
     # update kartu
     if t.get("card_msg"):
-        tg.edit_message(chat_id, t["card_msg"], card_text(d, t),
+        edit_html(chat_id, t["card_msg"], card_text(d, t),
                         reply_markup=tg.inline_stop(tid, t["token"]))
     save_state(s)
 
@@ -904,7 +996,7 @@ def poll_tracking(s, tid, t):
 def list_trackings(s, chat_id):
     active = s["trackings"]
     if not active:
-        tg.send_message(chat_id, "📋 Tidak ada pesanan yang sedang dipantau.",
+        send_html(chat_id, "📋 Tidak ada pesanan yang sedang dipantau.",
                         reply_markup=tg.reply_keyboard())
         return
     lines = ["📋 <b>Sedang dipantau ({})</b>".format(len(active))]
@@ -919,7 +1011,7 @@ def list_trackings(s, chat_id):
         lines.append(f"{pf} {esc(t['merchant'])} → {esc(t['dropoff'])}")
         lines.append(f"   <i>{esc(label)} · {mins} mnt · cek ke-{t['checks']}</i>")
         kb_rows.append([{"text": f"⏹ Stop #{i}", "callback_data": f"stop:{tid}"}])
-    tg.send_message(chat_id, "\n".join(lines),
+    send_html(chat_id, "\n".join(lines),
                     reply_markup={"inline_keyboard": kb_rows})
 
 
@@ -962,7 +1054,7 @@ def stats_body_and_kb(s):
 
 def show_stats(s, chat_id):
     body, kb = stats_body_and_kb(s)
-    tg.send_message(chat_id, body, reply_markup=kb)
+    send_html(chat_id, body, reply_markup=kb)
 
 
 WELCOME = """🛵🍊 <b>Pelacak pesanan Grab & ShopeeFood</b>
@@ -995,17 +1087,17 @@ def handle_message(s, m):
         save_state(s)
         log(f"owner set: {chat_id} ({frm.get('first_name')})")
     if chat_id != s["owner_id"]:
-        tg.send_message(chat_id, "🔒 Bot ini privat dan hanya untuk pemiliknya.")
+        send_html(chat_id, "🔒 Bot ini privat dan hanya untuk pemiliknya.")
         return
     if text == "/start":
         s["awaiting_link"] = False
         save_state(s)
-        tg.send_message(chat_id, WELCOME, reply_markup=tg.reply_keyboard())
+        send_html(chat_id, WELCOME, reply_markup=tg.reply_keyboard())
         return
     if text == "🛵 Lacak pesanan":
         s["awaiting_link"] = True
         save_state(s)
-        tg.send_message(chat_id, "Tempel link Grab / ShopeeFood-nya di sini 👇",
+        send_html(chat_id, "Tempel link Grab / ShopeeFood-nya di sini 👇",
                         reply_markup=tg.reply_keyboard())
         return
     if text == "📋 Daftar pantauan":
@@ -1025,7 +1117,7 @@ def handle_message(s, m):
     if s.get("awaiting_link"):
         s["awaiting_link"] = False
         save_state(s)
-        tg.send_message(chat_id,
+        send_html(chat_id,
                         "❌ Itu bukan link Grab/ShopeeFood yang dikenali. Coba tempel lagi ya.",
                         reply_markup=tg.reply_keyboard())
         return
@@ -1048,7 +1140,7 @@ def handle_callback(s, cb):
         body, kb = stats_body_and_kb(s)
         msg = cb.get("message") or {}
         if msg.get("message_id"):
-            tg.edit_message(chat_id, msg["message_id"], body, reply_markup=kb)
+            edit_html(chat_id, msg["message_id"], body, reply_markup=kb)
         return
     m = re.match(r"stop:(\d+)", data)
     if not m:
@@ -1061,13 +1153,13 @@ def handle_callback(s, cb):
         return
     if t.get("card_msg"):
         try:
-            tg.edit_message(chat_id, t["card_msg"],
+            edit_html(chat_id, t["card_msg"],
                             f"⏹ Pantauan dihentikan.\n🍜 {esc(t['merchant'])} → {esc(t['dropoff'])}")
         except Exception:
             pass
     cleanup_tracking(s, tid, t, "stopped by user")
     tg.answer_callback(cb["id"], "Pantauan dihentikan.")
-    tg.send_message(chat_id, "⏹ Pantauan dihentikan.",
+    send_html(chat_id, "⏹ Pantauan dihentikan.",
                     reply_markup=tg.reply_keyboard())
 
 
@@ -1109,7 +1201,7 @@ def main():
                 s["reminders"].remove(r)
                 if s["settings"].get("rating_reminder", True):
                     app = "ShopeeFood" if r.get("platform") == "shopee" else "Grab"
-                    tg.send_message(
+                    send_html(
                         r["chat_id"],
                         f"⭐ Pesananmu dari <b>{esc(r['merchant'])}</b> sudah "
                         f"{RATING_REMINDER_MINUTES} menit tiba. Jangan lupa kasih bintang "
