@@ -938,9 +938,17 @@ def stats_body_and_kb(s):
     ratings = [x["rating"] for x in h if x.get("rating")]
     lines = ["📊 <b>Statistik pantauan</b>", "",
              f"🍜 {total} pesanan selesai dipantau",
-             f"⏱ Rata-rata pesan → tiba: {avg_dur:.0f} menit"]
+             f"⏱ Rata-rata pesan → tiba: {avg_dur:.0f} menit", ""]
+    for pkey, icon, pname in (("grabfood", "🛵", "GrabFood"),
+                              ("shopeefood", "🟧", "ShopeeFood")):
+        items = [x for x in h if (x.get("platform") or "grabfood") == pkey]
+        if not items:
+            continue
+        pavg = sum(x["duration_min"] for x in items) / len(items)
+        lines.append(f"{icon} <b>{pname}</b>: {len(items)} pesanan · "
+                     f"rata-rata {pavg:.0f} mnt")
     if ratings:
-        lines.append(f"⭐ Rata-rata rating driver: {sum(ratings) / len(ratings):.1f}")
+        lines += ["", f"⭐ Rata-rata rating driver: {sum(ratings) / len(ratings):.1f}"]
     lines += ["", "<b>Restoran favorit:</b>"]
     for name, c in top:
         lines.append(f"• {esc(name)} ({c}x)")
