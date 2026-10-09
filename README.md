@@ -1,9 +1,11 @@
-# Pantau GrabFood — Bot Telegram Pribadi
+# Pantau GrabFood & ShopeeFood — Bot Telegram Pribadi
 
-Bot Telegram pribadi untuk memantau pesanan GrabFood lewat link share.
-Tempel link `https://app.grab.com/s/xxxxxx` atau
-`https://sharelocation.grab.com/o/xxxxxx`, bot memantau posisi driver tiap
-10 detik lewat kartu status + live location, lengkap dengan notifikasi.
+Bot Telegram pribadi untuk memantau pesanan GrabFood **dan ShopeeFood** lewat
+link share. Tempel link `https://app.grab.com/s/xxxxxx`,
+`https://sharelocation.grab.com/o/xxxxxx`, atau
+`https://www.shopeefood.co.id/tracker?code=...&orderId=...` — bot memantau
+posisi driver tiap 10 detik lewat kartu status + live location, lengkap dengan
+notifikasi.
 
 ## Menjalankan di tempat lain
 
@@ -26,13 +28,14 @@ Tempel link `https://app.grab.com/s/xxxxxx` atau
 ## Cara pakai (di Telegram)
 
 1. Kirim `/start`
-2. Tempel link share dari aplikasi Grab — `https://app.grab.com/s/xxxxxx`
-   atau `https://sharelocation.grab.com/o/xxxxxx`
+2. Tempel link share dari aplikasi Grab (`https://app.grab.com/s/xxxxxx`
+   atau `https://sharelocation.grab.com/o/xxxxxx`) atau dari aplikasi
+   ShopeeFood (`https://www.shopeefood.co.id/tracker?code=...&orderId=...`)
 3. Bot mengirim:
    - **Kartu status** (memperbarui diri tiap 10 detik): status pesanan, nama
      driver + rating, kendaraan + plat, asal, tujuan, jarak driver→tujuan,
      🗺️ progress bar perjalanan, perkiraan tiba. Tombol: ⏹ Stop,
-     📍 Buka peta driver.
+     📍 Buka peta driver (Grab) / 📍 Buka di ShopeeFood.
    - **Live location** mengikuti posisi driver.
 4. Notifikasi otomatis:
    - 🔔 "Driver sudah jalan membawa pesananmu."
@@ -61,6 +64,7 @@ Tempel link `https://app.grab.com/s/xxxxxx` atau
 | `bot.py` | Long-polling getUpdates, handler pesan/callback, loop pantau tiap 10 dtk |
 | `tg.py` | Wrapper Bot API via kredensial `custom.telegram` |
 | `grab_client.py` | Klien API Grab: resolve shortlink → token, `GET api.grab.com/api/v1/safety/sharemyride/{token}/bookingdetails`. Catatan: `app.grab.com/s/…` kadang me-return HTTP 200 (halaman SPA) bukan 302 — `resolve_token` mengikuti redirect sampai URL final lalu baca `shareOrderLink=`, dengan retry 4x |
+| `shopee_client.py` | Klien API ShopeeFood: parse `orderId`+`code` dari link tracker, `GET www.shopeefood.co.id/api/buyer/orders/{orderId}/tracing/{code}` (tanpa auth). Ditemukan dari bundle JS `main.*.chunk.js` halaman tracker |
 | `state.json` | owner_id, offset getUpdates, daftar pantauan aktif (tahan restart), antrian pengingat rating, settings |
 | `history.json` | Riwayat pesanan selesai (maks 100): merchant, driver, rating, durasi, selisih vs estimasi |
 | `bot.pid` / `bot.log` | pid proses + log |
@@ -68,8 +72,32 @@ Tempel link `https://app.grab.com/s/xxxxxx` atau
 
 ## Catatan teknis
 
+### API Grab
 - API Grab (`sharemyride/.../bookingdetails`) tidak butuh auth; ditemukan dari
   bundle JS `sharelocation.grab.com` (`config.json` → `uri: https://api.grab.com`).
+
+### API ShopeeFood (baru 2026-10-09)
+- Endpoint: `GET https://www.shopeefood.co.id/api/buyer/orders/{orderId}/tracing/{code}`
+  — tanpa auth, `code` disambung mentah ke path (boleh mengandung `=`).
+  Ditemukan dari bundle JS halaman tracker (`main.*.chunk.js`):
+  axios `baseURL: "/api/buyer"` + `bo.get("orders/".concat(orderId,"/tracing/").concat(code))`.
+- Respons: `{"code":0,"msg":"success","data":{"order":{...},"payment":[...]}}`.
+  Kode error: `1000` ParamInvalid, `2001` RecordNotFound,
+  `11160051` ShareTokenInvalid, `11160052` LinkIsExpired → dianggap link mati.
+- Status pesanan numerik (dilihat dari web app): `300` Confirmed
+  (resto menyiapkan), `400` Assigned, `411` EnterProcess, `412` ToCollect,
+  `425` Reconfirmed, `430` Picked, `431` EnrouteDelivery. Selesai/batal
+  dideteksi lewat `complete_time` / `delivery_complete_time` / `cancel_time`
+  yang terisi (nilai numerik Delivered/Completed/Cancelled tidak ditemukan
+  di bundle JS).
+- Nominal uang dalam satuan 1/100rb rupiah; waktu dalam ms epoch.
+  Lokasi driver: `order.driver.location.{latitude,longitude}` (ada setelah
+  driver ditugaskan). Info driver: `full_name`, `rating`, `vehicle_plate_no`,
+  `vehicle_description`.
+- Halaman share menampilkan nama + no. HP pemesan — bot tidak menampilkannya
+  di kartu (discretion), hanya dipakai internal.
+
+### Umum
 - `tg.py` **tidak** memakai `url_with_surrogate_path_segment()` dari
   `dynamic_credentials` karena ia me-percent-encode surrogate (`hsurr%3A…`)
   sehingga proxy egress tidak mengenalinya → Telegram 404. Surrogate

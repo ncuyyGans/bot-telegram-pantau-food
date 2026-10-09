@@ -18,6 +18,7 @@ WIB = ZoneInfo("Asia/Jakarta")  # semua waktu tampil pakai WIB
 
 import tg
 from grab_client import resolve_token, fetch_details, haversine_km
+import shopee_client as sp
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(BASE, "state.json")
@@ -86,17 +87,28 @@ def record_history(t, d=None, ended="completed"):
     d boleh None (mis. link kedaluwarsa tanpa data terbaru) — nama driver
     diambil dari data pantauan. ended: "completed" | "expired".
     """
-    drv = (d.get("driver") if d else None) or {}
-    try:
-        rating = float(drv.get("rating"))
-    except (TypeError, ValueError):
-        rating = None
+    plat = t.get("platform", "grab")
+    if plat == "shopee":
+        drv = sp.driver_of(d)
+        drv_name = sp.driver_name(drv) or t.get("driver", "-")
+        try:
+            rating = float(drv.get("rating"))
+        except (TypeError, ValueError):
+            rating = None
+    else:
+        drv = (d.get("driver") if d else None) or {}
+        drv_name = drv.get("name") or t.get("driver", "-")
+        try:
+            rating = float(drv.get("rating"))
+        except (TypeError, ValueError):
+            rating = None
     now = time.time()
     eta_first = t.get("eta_first")
     entry = {
+        "platform": "shopeefood" if plat == "shopee" else "grabfood",
         "merchant": t.get("merchant", "-"),
         "dropoff": t.get("dropoff", "-"),
-        "driver": drv.get("name") or t.get("driver", "-"),
+        "driver": drv_name,
         "rating": rating,
         "started_ts": t.get("started", now),
         "completed_ts": now,
@@ -250,6 +262,89 @@ def expired_text(t):
     return "\n".join(s)
 
 
+def shopee_card_text(d, t):
+    """Kartu status untuk pantauan ShopeeFood."""
+    order = sp.order_of(d)
+    store = order.get("store") or {}
+    st = sp.status_code(order)
+    mins = int((time.time() - t["started"]) // 60)
+    lines = [
+        f"🟧 <b>ShopeeFood — {esc(store.get('name') or t.get('merchant'))}</b>",
+        "",
+        f"📊 Status: {esc(sp.status_label(st))}",
+    ]
+    lo, hi = sp.eta_range(order)
+    if lo:
+        eta_s = fmt_eta(lo) + (f"–{fmt_eta(hi)}" if hi and hi != lo else "")
+        lines.append(f"⏱ Estimasi tiba: {eta_s}")
+    names = sp.item_names(order)
+    n_items = len(order.get("items") or [])
+    if names:
+        more = f" +{n_items - len(names)} lainnya" if n_items > len(names) else ""
+        lines.append(f"🍜 {esc(', '.join(names))}{more}")
+    drv = sp.driver_of(d)
+    dname = sp.driver_name(drv)
+    if dname:
+        rating = drv.get("rating")
+        plate = drv.get("vehicle_plate_no") or drv.get("vehiclePlateNo")
+        veh = drv.get("vehicle_description") or drv.get("vehicleDescription")
+        lines += ["",
+                  f"👤 {esc(dname)}" + (f" (⭐{rating})" if rating else ""),
+                  f"🏍 {esc(veh or '-')} · <code>{esc(plate or '-')}</code>"]
+    dloc = sp.driver_loc(drv)
+    dest = sp.dest_loc(order)
+    if dloc and dest:
+        dist = haversine_km(dloc[0], dloc[1], dest[0], dest[1])
+        lines.append(f"📏 Driver → tujuan: ±{fmt_dist(dist)} garis lurus")
+        init = t.get("initial_dist_km")
+        if init and init > 0.05 and st in sp.DELIVERY_STATES:
+            lines.append(f"🗺️ Perjalanan: {progress_bar(1 - dist / init)}")
+    lines.append(f"\n<i>dipantau {mins} menit · cek ke-{t['checks']}, tiap {POLL_INTERVAL} dtk</i>")
+    return "\n".join(lines)
+
+
+def shopee_completion_text(d, t=None):
+    order = sp.order_of(d)
+    store = order.get("store") or {}
+    dname = sp.driver_name(sp.driver_of(d)) or "-"
+    s = ["✅ <b>Selesai</b>", "Pesanan ShopeeFood tiba. Selamat menikmati! 🎉", "",
+         f"Dibawa {esc(dname)}." if dname != "-" else "Pesanan tiba.",
+         f"Dari {esc(store.get('name') or '-') }."]
+    if t:
+        now = time.time()
+        dur = (now - t.get("started", now)) / 60
+        s.append(f"\n⏱ Total waktu sejak dipantau: {dur:.0f} menit.")
+        diff = (now - t["eta_first"]) / 60 if t.get("eta_first") else None
+        if diff is not None:
+            if diff <= -1:
+                s.append(f"⚡ Tiba {-diff:.0f} menit <b>lebih cepat</b> dari estimasi awal 🎉")
+            elif diff >= 1:
+                s.append(f"🐌 Telat {diff:.0f} menit dari estimasi awal.")
+            else:
+                s.append("🎯 Tiba pas sesuai estimasi awal.")
+    return "\n".join(s)
+
+
+def shopee_expired_text(t):
+    """Ringkasan saat link ShopeeFood kedaluwarsa — kemungkinan pesanan sudah sampai."""
+    s = ["⌛ <b>Link pantauan kedaluwarsa</b>",
+         "Kemungkinan pesanan ShopeeFood sudah sampai — tercatat di riwayat. 🎉", "",
+         f"🟧 {esc(t.get('merchant', '-'))} → {esc(t.get('dropoff', '-'))}",
+         f"🛵 Driver: {esc(t.get('driver', '-'))}"]
+    now = time.time()
+    dur = (now - t.get("started", now)) / 60
+    s.append(f"\n⏱ Total waktu sejak dipantau: {dur:.0f} menit.")
+    diff = (now - t["eta_first"]) / 60 if t.get("eta_first") else None
+    if diff is not None:
+        if diff <= -1:
+            s.append(f"⚡ Tiba {-diff:.0f} menit <b>lebih cepat</b> dari estimasi awal 🎉")
+        elif diff >= 1:
+            s.append(f"🐌 Telat {diff:.0f} menit dari estimasi awal.")
+        else:
+            s.append("🎯 Tiba pas sesuai estimasi awal.")
+    return "\n".join(s)
+
+
 def cleanup_tracking(s, tid, t, reason):
     try:
         if t.get("live_msg"):
@@ -262,6 +357,14 @@ def cleanup_tracking(s, tid, t, reason):
 
 
 def start_tracking(s, chat_id, link):
+    """Dispatcher: Grab atau ShopeeFood tergantung linknya."""
+    if "shopeefood.co.id/tracker" in (link or ""):
+        start_shopee_tracking(s, chat_id, link)
+    else:
+        start_grab_tracking(s, chat_id, link)
+
+
+def start_grab_tracking(s, chat_id, link):
     active = s["trackings"]
     if len(active) >= MAX_TRACKINGS:
         tg.send_message(chat_id,
@@ -278,7 +381,7 @@ def start_tracking(s, chat_id, link):
                         reply_markup=tg.reply_keyboard())
         return
     for tid, t in active.items():
-        if t["token"] == token:
+        if t.get("token") == token:
             tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
                             reply_markup=tg.reply_keyboard())
             return
@@ -323,7 +426,7 @@ def start_tracking(s, chat_id, link):
     if dloc0.get("latitude") and doloc0.get("latitude"):
         dist0 = haversine_km(dloc0["latitude"], dloc0["longitude"],
                              doloc0["latitude"], doloc0["longitude"])
-    t = {"token": token, "chat_id": chat_id, "started": time.time(),
+    t = {"platform": "grab", "token": token, "chat_id": chat_id, "started": time.time(),
          "checks": 0, "fetch_fails": 0, "milestones": [],
          "last_state": bk.get("bookingState", ""),
          "notified_onway": False, "notified_near": False,
@@ -350,6 +453,248 @@ def start_tracking(s, chat_id, link):
                     "Kartu di atas memperbarui diri sendiri.",
                     reply_markup=tg.reply_keyboard())
     log(f"tracking {tid} started: {t['merchant']} -> {t['dropoff']}")
+
+
+def start_shopee_tracking(s, chat_id, link):
+    active = s["trackings"]
+    if len(active) >= MAX_TRACKINGS:
+        tg.send_message(chat_id,
+                        f"⚠️ Maksimal {MAX_TRACKINGS} pesanan dipantau sekaligus. "
+                        "Hentikan salah satu dulu lewat 📋 Daftar pantauan.",
+                        reply_markup=tg.reply_keyboard())
+        return
+    parsed = sp.parse_link(link)
+    if not parsed:
+        log(f"shopee link parse FAILED: {link[:70]}")
+        tg.send_message(chat_id,
+                        "❌ Link ShopeeFood tidak dikenali. Tempel link tracker dari "
+                        "aplikasi ShopeeFood, contoh:\n"
+                        "<code>https://www.shopeefood.co.id/tracker?code=...&amp;orderId=...</code>",
+                        reply_markup=tg.reply_keyboard())
+        return
+    order_id, code = parsed
+    for tid, t in active.items():
+        if t.get("platform") == "shopee" and t.get("order_id") == order_id:
+            tg.send_message(chat_id, "ℹ️ Link ini sedang dipantau.",
+                            reply_markup=tg.reply_keyboard())
+            return
+    d, status = sp.fetch_details(order_id, code)
+    if status == "error":
+        log(f"shopee link fetch ERROR (transient): order={order_id}")
+        tg.send_message(chat_id,
+                        "⚠️ Gagal menghubungi ShopeeFood. Coba tempel ulang linknya.",
+                        reply_markup=tg.reply_keyboard())
+        return
+    if status == "dead":
+        log(f"shopee link fetch DEAD: order={order_id}")
+        tg.send_message(chat_id,
+                        "❌ Link tidak valid atau sesi pantauannya sudah berakhir.",
+                        reply_markup=tg.reply_keyboard())
+        return
+    order = sp.order_of(d)
+    st = sp.status_code(order)
+    store = order.get("store") or {}
+    dest = order.get("delivery_address") or {}
+    merchant = store.get("name") or "-"
+    dropoff = ((dest.get("location") or {}).get("address") or "-")[:80]
+    lo, hi = sp.eta_range(order)
+    log(f"shopee link OK: order={order_id} status={st} store={merchant}")
+    tt = {"platform": "shopee", "merchant": merchant, "dropoff": dropoff,
+          "driver": sp.driver_name(sp.driver_of(d)) or "-",
+          "started": time.time(), "eta_first": lo}
+    if sp.is_done(order):
+        record_history(tt, d)
+        log(f"history recorded (shopee already done at paste): {merchant}")
+        tg.send_message(chat_id, shopee_completion_text(d),
+                        reply_markup=tg.reply_keyboard())
+        return
+    if sp.is_cancelled(order):
+        tg.send_message(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
+                        reply_markup=tg.reply_keyboard())
+        return
+    tid = str(s["next_id"])
+    s["next_id"] += 1
+    t = {"platform": "shopee", "order_id": order_id, "code": code,
+         "tracker_url": sp.tracker_url(order_id, code),
+         "chat_id": chat_id, "started": time.time(),
+         "checks": 0, "fetch_fails": 0, "milestones": [],
+         "last_state": st,
+         "notified_assigned": False, "notified_picked": False,
+         "notified_enroute": False, "notified_near": False,
+         "notified_stuck": False,
+         "merchant": merchant, "dropoff": dropoff,
+         "driver": tt["driver"], "card_msg": None, "live_msg": None,
+         "eta_first": lo, "initial_dist_km": None,
+         "last_driver_pos": None, "last_move_ts": None}
+    s["trackings"][tid] = t
+    save_state(s)
+    kb = tg.inline_stop_url(tid, t["tracker_url"], "📍 Buka di ShopeeFood")
+    r1 = tg.send_message(chat_id, shopee_card_text(d, t), reply_markup=kb)
+    if r1.get("ok"):
+        t["card_msg"] = r1["result"]["message_id"]
+    dloc = sp.driver_loc(sp.driver_of(d))
+    if dloc:
+        r2 = tg.send_location(chat_id, dloc[0], dloc[1])
+        if r2.get("ok"):
+            t["live_msg"] = r2["result"]["message_id"]
+    save_state(s)
+    tg.send_message(chat_id,
+                    f"👀 Mulai memantau <b>{esc(merchant)}</b> (ShopeeFood). "
+                    "Kartu di atas memperbarui diri sendiri.",
+                    reply_markup=tg.reply_keyboard())
+    log(f"tracking {tid} started (shopee): {merchant} -> {dropoff[:40]}")
+
+
+def poll_shopee_tracking(s, tid, t):
+    d, status = sp.fetch_details(t["order_id"], t["code"])
+    t["checks"] += 1
+    chat_id = t["chat_id"]
+    if status == "error":
+        # Gangguan sesaat — jangan langsung akhiri, coba lagi dulu
+        t["fetch_fails"] = t.get("fetch_fails", 0) + 1
+        save_state(s)
+        if t["fetch_fails"] >= MAX_FETCH_FAILS:
+            log(f"tracking {tid}: {MAX_FETCH_FAILS}x fetch error, giving up")
+            tg.send_message(chat_id,
+                            "⚠️ Koneksi ke ShopeeFood bermasalah berulang kali, "
+                            "pantauan dihentikan.\nRiwayat tidak tercatat karena "
+                            "status pesanan tidak diketahui — tempel ulang linknya "
+                            "kalau masih dibutuhkan.",
+                            reply_markup=tg.reply_keyboard())
+            cleanup_tracking(s, tid, t, "fetch errors")
+        return
+    t["fetch_fails"] = 0
+    if status == "dead":
+        # Link kedaluwarsa = pesanan kemungkinan besar sudah sampai
+        entry = record_history(t, d, ended="expired")
+        log(f"history recorded (shopee link expired): {entry['merchant']} "
+            f"({entry['duration_min']} mnt)")
+        if t.get("card_msg"):
+            tg.edit_message(chat_id, t["card_msg"], shopee_expired_text(t))
+        else:
+            tg.send_message(chat_id, shopee_expired_text(t),
+                            reply_markup=tg.reply_keyboard())
+        s["reminders"].append({
+            "chat_id": chat_id, "platform": "shopee",
+            "merchant": t.get("merchant", "-"),
+            "driver": t.get("driver", "-"),
+            "at": time.time() + RATING_REMINDER_MINUTES * 60})
+        save_state(s)
+        cleanup_tracking(s, tid, t, "link expired")
+        return
+    order = sp.order_of(d)
+    st = sp.status_code(order)
+    drv = sp.driver_of(d)
+    dname = sp.driver_name(drv)
+    if dname:
+        t["driver"] = dname
+
+    if sp.is_done(order):
+        entry = record_history(t, d)
+        log(f"history recorded (shopee): {entry['merchant']} ({entry['duration_min']} mnt)")
+        if t.get("card_msg"):
+            tg.edit_message(chat_id, t["card_msg"], shopee_completion_text(d, t))
+        else:
+            tg.send_message(chat_id, shopee_completion_text(d, t),
+                            reply_markup=tg.reply_keyboard())
+        s["reminders"].append({
+            "chat_id": chat_id, "platform": "shopee",
+            "merchant": t.get("merchant", "-"),
+            "driver": dname or t.get("driver", "-"),
+            "at": time.time() + RATING_REMINDER_MINUTES * 60})
+        save_state(s)
+        cleanup_tracking(s, tid, t, "completed")
+        return
+    if sp.is_cancelled(order):
+        tg.send_message(chat_id, "🚫 Pesanan ShopeeFood dibatalkan.",
+                        reply_markup=tg.reply_keyboard())
+        cleanup_tracking(s, tid, t, "cancelled")
+        return
+    if time.time() - t["started"] > MAX_TRACK_MINUTES * 60:
+        tg.send_message(chat_id,
+                        "⌛ Pantauan dihentikan otomatis (melebihi 2 jam).",
+                        reply_markup=tg.reply_keyboard())
+        cleanup_tracking(s, tid, t, "timeout")
+        return
+
+    # transisi status khas ShopeeFood
+    if st == 400 and not t.get("notified_assigned"):
+        t["notified_assigned"] = True
+        tg.send_message(chat_id, "🔔 Driver ShopeeFood sudah ditugaskan. 🟧")
+    if st == 430 and not t.get("notified_picked"):
+        t["notified_picked"] = True
+        tg.send_message(chat_id, "🔔 Pesananmu sudah diambil driver ShopeeFood.")
+    if st == 431 and not t.get("notified_enroute"):
+        t["notified_enroute"] = True
+        tg.send_message(chat_id, "🔔 Driver ShopeeFood sedang menuju lokasimu. 🟧")
+
+    dloc = sp.driver_loc(drv)
+    dest = sp.dest_loc(order)
+    dist = None
+    if dloc and dest:
+        dist = haversine_km(dloc[0], dloc[1], dest[0], dest[1])
+    # baseline jarak rute saat driver mulai membawa pesanan
+    if t.get("initial_dist_km") is None and st in sp.DELIVERY_STATES:
+        pk = sp.store_loc(order)
+        if pk and dest:
+            t["initial_dist_km"] = haversine_km(pk[0], pk[1], dest[0], dest[1])
+    # driver dekat tujuan
+    if (not t["notified_near"] and dist is not None
+            and dist <= NEAR_THRESHOLD_KM and st in sp.DELIVERY_STATES):
+        t["notified_near"] = True
+        tg.send_message(
+            chat_id,
+            f"🟧 Driver ShopeeFood sudah dekat — tinggal sekitar {int(dist * 1000)} meter lagi.")
+    # notifikasi milestone progres perjalanan (25% / 50% / 80%)
+    init = t.get("initial_dist_km")
+    if (dist is not None and init and init > 0.05
+            and st in sp.DELIVERY_STATES):
+        prog = max(0.0, min(1.0, 1 - dist / init))
+        done = set(t.get("milestones") or [])
+        crossed = [m for m in MILESTONES if prog >= m and m not in done]
+        if crossed:
+            top = max(crossed)
+            t["milestones"] = sorted(m for m in MILESTONES if m <= top)
+            _lo, hi = sp.eta_range(order)
+            tg.send_message(chat_id, milestone_text(top, dist, hi))
+            log(f"tracking {tid}: milestone {int(top * 100)}% "
+                f"(sisa {fmt_dist(dist)})")
+    # driver berhenti lama saat mengantar
+    if st in sp.DELIVERY_STATES and dloc:
+        now2 = time.time()
+        lp = t.get("last_driver_pos")
+        moved = True
+        if lp:
+            moved = haversine_km(lp[0], lp[1], dloc[0], dloc[1]) >= STUCK_DIST_KM
+        if moved:
+            t["last_driver_pos"] = [dloc[0], dloc[1]]
+            t["last_move_ts"] = now2
+        elif (not t.get("notified_stuck")
+                and now2 - (t.get("last_move_ts") or t["started"]) >= STUCK_MINUTES * 60):
+            t["notified_stuck"] = True
+            tg.send_message(chat_id,
+                            f"🚦 {esc(t.get('driver', 'Driver'))} belum bergerak ~{STUCK_MINUTES} menit "
+                            "— mungkin macet atau mampir sebentar.")
+    t["last_state"] = st
+
+    # update live location
+    if dloc:
+        if t.get("live_msg"):
+            r = tg.edit_live_location(chat_id, t["live_msg"], dloc[0], dloc[1])
+            if not r.get("ok") and "live location" in str(r.get("description", "")).lower():
+                r2 = tg.send_location(chat_id, dloc[0], dloc[1])
+                if r2.get("ok"):
+                    t["live_msg"] = r2["result"]["message_id"]
+        else:
+            r2 = tg.send_location(chat_id, dloc[0], dloc[1])
+            if r2.get("ok"):
+                t["live_msg"] = r2["result"]["message_id"]
+    # update kartu
+    if t.get("card_msg"):
+        tg.edit_message(chat_id, t["card_msg"], shopee_card_text(d, t),
+                        reply_markup=tg.inline_stop_url(
+                            tid, t["tracker_url"], "📍 Buka di ShopeeFood"))
+    save_state(s)
 
 
 def poll_tracking(s, tid, t):
@@ -382,7 +727,7 @@ def poll_tracking(s, tid, t):
             tg.send_message(chat_id, expired_text(t),
                             reply_markup=tg.reply_keyboard())
         s["reminders"].append({
-            "chat_id": chat_id,
+            "chat_id": chat_id, "platform": "grab",
             "merchant": t.get("merchant", "-"),
             "driver": t.get("driver", "-"),
             "at": time.time() + RATING_REMINDER_MINUTES * 60})
@@ -405,7 +750,7 @@ def poll_tracking(s, tid, t):
             tg.send_message(chat_id, completion_text(d, t),
                             reply_markup=tg.reply_keyboard())
         s["reminders"].append({
-            "chat_id": chat_id,
+            "chat_id": chat_id, "platform": "grab",
             "merchant": t.get("merchant", "-"),
             "driver": (d.get("driver") or {}).get("name") or t.get("driver", "-"),
             "at": time.time() + RATING_REMINDER_MINUTES * 60})
@@ -503,12 +848,16 @@ def list_trackings(s, chat_id):
         tg.send_message(chat_id, "📋 Tidak ada pesanan yang sedang dipantau.",
                         reply_markup=tg.reply_keyboard())
         return
-    lines = [f"🛵 <b>Sedang dipantau ({len(active)})</b>"]
+    lines = ["📋 <b>Sedang dipantau ({})</b>".format(len(active))]
     kb_rows = []
     for i, (tid, t) in enumerate(active.items(), 1):
         mins = int((time.time() - t["started"]) // 60)
-        label = STATE_LABEL.get(t.get("last_state"), "")
-        lines.append(f"{i}. {esc(t['merchant'])} → {esc(t['dropoff'])}")
+        pf = "🟧" if t.get("platform") == "shopee" else "🛵"
+        if t.get("platform") == "shopee":
+            label = sp.status_label(t.get("last_state"))
+        else:
+            label = STATE_LABEL.get(t.get("last_state"), "")
+        lines.append(f"{pf} {esc(t['merchant'])} → {esc(t['dropoff'])}")
         lines.append(f"   <i>{esc(label)} · {mins} mnt · cek ke-{t['checks']}</i>")
         kb_rows.append([{"text": f"⏹ Stop #{i}", "callback_data": f"stop:{tid}"}])
     tg.send_message(chat_id, "\n".join(lines),
@@ -539,7 +888,8 @@ def stats_body_and_kb(s):
     lines += ["", "<b>Terakhir:</b>"]
     for x in h[-5:][::-1]:
         dt = datetime.fromtimestamp(x["completed_ts"], WIB).strftime("%d/%m %H:%M")
-        lines.append(f"• {esc(x['merchant'])} — {dt}")
+        pf = "🟧" if x.get("platform") == "shopeefood" else "🛵"
+        lines.append(f"{pf} {esc(x['merchant'])} — {dt}")
     return ("\n".join(lines), kb)
 
 
@@ -548,10 +898,10 @@ def show_stats(s, chat_id):
     tg.send_message(chat_id, body, reply_markup=kb)
 
 
-WELCOME = """🛵 <b>Pelacak pesanan Grab</b>
+WELCOME = """🛵🍊 <b>Pelacak pesanan Grab & ShopeeFood</b>
 
-Tempel link Grab-nya di sini — langsung dipantau, tidak perlu mengetik perintah apa pun.
-<code>sharelocation.grab.com/o/...</code> atau <code>app.grab.com/s/...</code>
+Tempel link share-nya di sini — langsung dipantau, tidak perlu mengetik perintah apa pun.
+<code>app.grab.com/s/...</code> atau <code>shopeefood.co.id/tracker?...</code>
 
 Kartunya memperbarui diri sendiri sampai pesanan selesai. Mau berhenti lebih cepat? Tekan ⏹ Stop di bawah kartu.
 
@@ -588,7 +938,7 @@ def handle_message(s, m):
     if text == "🛵 Lacak pesanan":
         s["awaiting_link"] = True
         save_state(s)
-        tg.send_message(chat_id, "Tempel link Grab-nya di sini 👇",
+        tg.send_message(chat_id, "Tempel link Grab / ShopeeFood-nya di sini 👇",
                         reply_markup=tg.reply_keyboard())
         return
     if text == "📋 Daftar pantauan":
@@ -597,7 +947,7 @@ def handle_message(s, m):
     if text == "📊 Statistik":
         show_stats(s, chat_id)
         return
-    if re.search(r"(sharelocation\.grab\.com/o/|app\.grab\.com/s/)", text):
+    if re.search(r"(sharelocation\.grab\.com/o/|app\.grab\.com/s/|shopeefood\.co\.id/tracker)", text):
         s["awaiting_link"] = False
         m_link = re.search(r"https?://\S*", text)
         link = m_link.group(0) if m_link else text
@@ -609,7 +959,7 @@ def handle_message(s, m):
         s["awaiting_link"] = False
         save_state(s)
         tg.send_message(chat_id,
-                        "❌ Itu bukan link Grab yang dikenali. Coba tempel lagi ya.",
+                        "❌ Itu bukan link Grab/ShopeeFood yang dikenali. Coba tempel lagi ya.",
                         reply_markup=tg.reply_keyboard())
         return
     # teks tak dikenal: diam saja (bot privat satu pengguna)
@@ -691,11 +1041,12 @@ def main():
             if now >= r["at"]:
                 s["reminders"].remove(r)
                 if s["settings"].get("rating_reminder", True):
+                    app = "ShopeeFood" if r.get("platform") == "shopee" else "Grab"
                     tg.send_message(
                         r["chat_id"],
                         f"⭐ Pesananmu dari <b>{esc(r['merchant'])}</b> sudah "
                         f"{RATING_REMINDER_MINUTES} menit tiba. Jangan lupa kasih bintang "
-                        f"buat {esc(r['driver'])} di aplikasi Grab ya! 🙏",
+                        f"buat {esc(r['driver'])} di aplikasi {app} ya! 🙏",
                         reply_markup=tg.reply_keyboard())
                 save_state(s)
         now = time.time()
@@ -706,7 +1057,10 @@ def main():
                 if not t:
                     continue
                 try:
-                    poll_tracking(s, tid, t)
+                    if t.get("platform") == "shopee":
+                        poll_shopee_tracking(s, tid, t)
+                    else:
+                        poll_tracking(s, tid, t)
                 except Exception as e:
                     log(f"poll error {tid}: {e}")
                 time.sleep(1)

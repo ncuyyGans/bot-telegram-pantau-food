@@ -111,3 +111,10 @@ def inline_stop(tid, token):
         [{"text": "⏹ Stop", "callback_data": f"stop:{tid}"},
          {"text": "📍 Buka peta driver",
           "url": f"https://sharelocation.grab.com/o/{token}"}]]}
+
+
+def inline_stop_url(tid, url, label="📍 Buka pelacakan"):
+    """Varian tombol Stop + link untuk platform selain Grab."""
+    return {"inline_keyboard": [
+        [{"text": "⏹ Stop", "callback_data": f"stop:{tid}"},
+         {"text": label, "url": url}]]}
