@@ -92,7 +92,7 @@ def record_history(t, d=None, ended="completed"):
         drv = sp.driver_of(d)
         drv_name = sp.driver_name(drv) or t.get("driver", "-")
         try:
-            rating = float(drv.get("rating"))
+            rating = float(sp.driver_rating(drv))
         except (TypeError, ValueError):
             rating = None
     else:
@@ -285,12 +285,15 @@ def shopee_card_text(d, t):
     drv = sp.driver_of(d)
     dname = sp.driver_name(drv)
     if dname:
-        rating = drv.get("rating")
-        plate = drv.get("vehicle_plate_no") or drv.get("vehiclePlateNo")
-        veh = drv.get("vehicle_description") or drv.get("vehicleDescription")
+        rating = sp.driver_rating(drv)
+        plate = sp.driver_plate(drv)
+        veh = sp.driver_vehicle(drv)
+        phone = sp.driver_phone(drv)
         lines += ["",
                   f"👤 {esc(dname)}" + (f" (⭐{rating})" if rating else ""),
                   f"🏍 {esc(veh or '-')} · <code>{esc(plate or '-')}</code>"]
+        if phone:
+            lines.append(f"📞 <code>{esc(phone)}</code>")
     dloc = sp.driver_loc(drv)
     dest = sp.dest_loc(order)
     if dloc and dest:
@@ -588,6 +591,15 @@ def poll_shopee_tracking(s, tid, t):
     dname = sp.driver_name(drv)
     if dname:
         t["driver"] = dname
+    # Sekali saja saat driver pertama muncul: catat field mentah driver
+    # (untuk verifikasi apakah API share ShopeeFood menyertakan kontak driver)
+    if dname and not t.get("driver_fields_logged"):
+        t["driver_fields_logged"] = True
+        keys = sorted(drv.keys())
+        phone = sp.driver_phone(drv)
+        masked = (phone[:4] + "***" + phone[-2:]) if phone else "-"
+        log(f"tracking {tid}: shopee driver fields: {keys} "
+            f"| phone_present={bool(phone)} phone_masked={masked}")
 
     if sp.is_done(order):
         entry = record_history(t, d)

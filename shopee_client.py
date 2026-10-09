@@ -124,11 +124,41 @@ def status_label(code):
 
 
 def driver_of(data):
-    return order_of(data).get("driver") or {}
+    """Objek driver mentah. Web app mengambil dari order.driver dengan
+    fallback ke unionDelivery(.union_delivery).driver — sama seperti di sini."""
+    o = order_of(data)
+    drv = o.get("driver")
+    if drv:
+        return drv
+    for key in ("unionDelivery", "union_delivery"):
+        ud = (data or {}).get(key) or o.get(key) or {}
+        if isinstance(ud, dict) and ud.get("driver"):
+            return ud["driver"]
+    return {}
 
 
 def driver_name(driver):
     return (driver or {}).get("full_name") or (driver or {}).get("fullName") or ""
+
+
+def driver_phone(driver):
+    d = driver or {}
+    return d.get("phone") or d.get("phone_no") or d.get("phoneNo") or ""
+
+
+def driver_rating(driver):
+    d = driver or {}
+    return d.get("rating") or d.get("rating_score") or ""
+
+
+def driver_plate(driver):
+    d = driver or {}
+    return d.get("vehicle_plate_no") or d.get("vehiclePlateNo") or ""
+
+
+def driver_vehicle(driver):
+    d = driver or {}
+    return d.get("vehicle_description") or d.get("vehicleDescription") or ""
 
 
 def _latlng(loc):

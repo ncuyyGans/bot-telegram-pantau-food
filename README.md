@@ -94,8 +94,15 @@ notifikasi.
   Lokasi driver: `order.driver.location.{latitude,longitude}` (ada setelah
   driver ditugaskan). Info driver: `full_name`, `rating`, `vehicle_plate_no`,
   `vehicle_description`.
-- Halaman share menampilkan nama + no. HP pemesan — bot tidak menampilkannya
-  di kartu (discretion), hanya dipakai internal.
+- Info driver TIDAK ada di `order.driver` saat diambil — pindah ke
+  `data.union_delivery.driver` (sesuai fallback di web app:
+  `ke.driver || e.unionDelivery?.driver`). Objeknya berisi `full_name`,
+  **`phone`**, `vehicle_plate_no`, `profile_photo`, `rating_score` —
+  nomor HP driver memang dikirim lewat link share ini (halaman web-nya
+  sendiri tidak menampilkannya, tapi bot menampilkannya di kartu).
+  Lokasi live driver: `driver.location` (muncul belakangan).
+- Halaman share juga menampilkan nama + no. HP pemesan — bot tidak
+  menampilkannya di kartu (discretion), hanya dipakai internal.
 
 ### Umum
 - `tg.py` **tidak** memakai `url_with_surrogate_path_segment()` dari
