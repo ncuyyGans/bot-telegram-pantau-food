@@ -104,6 +104,14 @@ def fetch_details_retry(order_id, code, tries=3, delay=2):
     return d, status
 
 
+def update_time_ms(data):
+    """update_time order (ms epoch) — dipakai membandingkan kesegaran 2 kode share."""
+    try:
+        return int(order_of(data).get("update_time") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def order_of(data):
     return (data or {}).get("order") or {}
 

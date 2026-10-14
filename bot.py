@@ -584,7 +584,20 @@ def start_shopee_tracking(s, chat_id, link):
                 send_html(chat_id, "ℹ️ Link ini sedang dipantau.",
                                 reply_markup=tg.reply_keyboard())
                 return
-            # ShopeeFood merotasi kode share — update pantauan yang sudah ada
+            # ShopeeFood merotasi kode share — tapi kode lama biasanya tetap
+            # memberi data segar. Cek dulu: kalau kode lama masih segar,
+            # pantauan tetap pakai kode lama (user cukup tempel sekali).
+            d_old, s_old = sp.fetch_details_retry(order_id, t.get("code") or "")
+            d_new, s_new = sp.fetch_details_retry(order_id, code)
+            if (s_old == "ok" and s_new == "ok"
+                    and sp.update_time_ms(d_old) >= sp.update_time_ms(d_new)):
+                send_html(chat_id,
+                                "ℹ️ Link lama masih aktif & datanya segar — pantauan "
+                                "tetap jalan pakai link pertama. Nggak perlu tempel "
+                                "ulang tiap ShopeeFood ganti link. 🟧",
+                                reply_markup=tg.reply_keyboard())
+                return
+            # Kode lama mati/basi — baru pindah ke kode baru
             t["code"] = code
             t["tracker_url"] = sp.tracker_url(order_id, code)
             t["fetch_fails"] = 0
@@ -592,14 +605,13 @@ def start_shopee_tracking(s, chat_id, link):
             t.pop("link_dead_notified", None)
             save_state(s)
             log(f"tracking {tid}: shopee share code rotated, updated")
-            d2, s2 = sp.fetch_details(order_id, code)
-            if s2 == "ok" and t.get("card_msg"):
-                edit_html(chat_id, t["card_msg"], shopee_card_text(d2, t),
+            if s_new == "ok" and t.get("card_msg"):
+                edit_html(chat_id, t["card_msg"], shopee_card_text(d_new, t),
                                 reply_markup=tg.inline_stop_url(
                                     tid, t["tracker_url"], "📍 Buka di ShopeeFood"))
             send_html(chat_id,
-                            "🔄 Link share ShopeeFood diperbarui — pantauan dilanjutkan "
-                            "dengan data terbaru. 🟧",
+                            "🔄 Link lama sudah tidak memberi data terbaru — pantauan "
+                            "dilanjutkan dengan link terbaru. 🟧",
                             reply_markup=tg.reply_keyboard())
             return
     d, status = sp.fetch_details_retry(order_id, code)
