@@ -30,8 +30,16 @@ def _get_surrogate():
     if _surrogate_val and time.time() - _surrogate_ts < 600:
         return _surrogate_val
     # Muse environment: token dari kredensial custom.telegram (lazy import
-    # agar modul ini tetap bisa dipakai di luar lingkungan Muse)
-    sys.path.insert(0, "/opt/hatch/skills/skill-creator/bin")
+    # agar modul ini tetap bisa dipakai di luar lingkungan Muse).
+    # Lokasi modul dynamic_credentials berpindah antar deployment VM,
+    # jadi coba beberapa kandidat path (2026-10-15: /opt/hatch/skills/skill-creator/bin
+    # sudah tidak ada; modul kini di custom-connector-setup/bin).
+    for _cand in ("/opt/hatch/workflow-skills/custom-connector-setup/bin",
+                 "/opt/muse/skills/custom-connector-setup/bin",
+                 "/opt/hatch/skills/skill-creator/bin"):
+        if os.path.isdir(_cand):
+            sys.path.insert(0, _cand)
+            break
     from dynamic_credentials import dynamic_credential_entry
     _surrogate_val = dynamic_credential_entry("custom.telegram")["surrogate"].strip()
     _surrogate_ts = time.time()
