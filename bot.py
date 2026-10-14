@@ -485,7 +485,12 @@ def start_grab_tracking(s, chat_id, link):
             send_html(chat_id, "ℹ️ Link ini sedang dipantau.",
                             reply_markup=tg.reply_keyboard())
             return
-    d, status = fetch_details(token)
+    d, status = None, "error"
+    for _ in range(3):  # retry gangguan sesaat, biar user nggak disuruh tempel ulang
+        d, status = fetch_details(token)
+        if status != "error":
+            break
+        time.sleep(2)
     if status == "error":
         log(f"link fetch ERROR (transient): token={token[:10]}...")
         send_html(chat_id,
@@ -597,7 +602,7 @@ def start_shopee_tracking(s, chat_id, link):
                             "dengan data terbaru. 🟧",
                             reply_markup=tg.reply_keyboard())
             return
-    d, status = sp.fetch_details(order_id, code)
+    d, status = sp.fetch_details_retry(order_id, code)
     if status == "error":
         log(f"shopee link fetch ERROR (transient): order={order_id}")
         send_html(chat_id,

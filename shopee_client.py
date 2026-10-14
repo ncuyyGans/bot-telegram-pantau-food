@@ -10,6 +10,7 @@ Error codes (from the web app): 1000 ParamInvalid, 2001 RecordNotFound,
 11160051 ShareTokenInvalid, 11160052 LinkIsExpired.
 """
 import json
+import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse, parse_qsl
@@ -85,6 +86,22 @@ def fetch_details(order_id, code):
     if not data or not (data.get("order") or {}).get("id"):
         return data, "dead"
     return data, "ok"
+
+
+def fetch_details_retry(order_id, code, tries=3, delay=2):
+    """fetch_details + retry otomatis untuk gangguan sesaat (status 'error').
+
+    'dead' tidak di-retry (sudah pasti), 'ok' langsung kembali. Dipakai saat
+    user baru tempel link — jangan sampai satu hiccup jaringan bikin user
+    disuruh tempel ulang berkali-kali.
+    """
+    d, status = None, "error"
+    for i in range(tries):
+        d, status = fetch_details(order_id, code)
+        if status != "error" or i == tries - 1:
+            return d, status
+        time.sleep(delay)
+    return d, status
 
 
 def order_of(data):
