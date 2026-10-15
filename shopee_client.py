@@ -88,19 +88,19 @@ def fetch_details(order_id, code):
     return data, "ok"
 
 
-def fetch_details_retry(order_id, code, tries=3, delay=2):
+def fetch_details_retry(order_id, code, tries=5, delay=2):
     """fetch_details + retry otomatis untuk gangguan sesaat (status 'error').
 
-    'dead' tidak di-retry (sudah pasti), 'ok' langsung kembali. Dipakai saat
-    user baru tempel link — jangan sampai satu hiccup jaringan bikin user
-    disuruh tempel ulang berkali-kali.
+    Backoff 2, 4, 8, 16 detik (maks ~30 dtk). 'dead' tidak di-retry (sudah
+    pasti), 'ok' langsung kembali. Dipakai saat user baru tempel link —
+    jangan sampai hiccup jaringan bikin user disuruh tempel ulang berkali-kali.
     """
     d, status = None, "error"
     for i in range(tries):
         d, status = fetch_details(order_id, code)
         if status != "error" or i == tries - 1:
             return d, status
-        time.sleep(delay)
+        time.sleep(delay * (2 ** i))
     return d, status
 
 
@@ -286,3 +286,75 @@ if __name__ == "__main__":
         print("eta:", datetime.fromtimestamp(lo, wib).strftime("%H:%M") if lo else "-",
               "-", datetime.fromtimestamp(hi, wib).strftime("%H:%M") if hi else "")
         print("done:", is_done(o), "| cancelled:", is_cancelled(o))
+
+
+# --- Info pesanan & estimasi posisi (untuk kartu & live location) ---
+
+def items_of(order):
+    """[{'name', 'qty', 'unit_price'}] — unit_price nominal API (//1e5 = rupiah)."""
+    out = []
+    for it in (order or {}).get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        ci = it.get("cart_item") or {}
+        det = ci.get("detail") or {}
+        dish = det.get("dish") or {}
+        name = dish.get("name") or "Item"
+        try:
+            qty = int(ci.get("quantity") or 1)
+        except (TypeError, ValueError):
+            qty = 1
+        out.append({"name": name, "qty": qty,
+                    "unit_price": it.get("unit_price") or 0})
+    return out
+
+
+def amounts_of(order):
+    """Ringkasan pembayaran dalam rupiah: subtotal, ongkir, diskon, total."""
+    amt = (order or {}).get("amount") or {}
+    promo = amt.get("promotion") or {}
+    discount = sum(rupiah(promo.get(k)) for k in (
+        "item_voucher_amount", "shipping_voucher_amount",
+        "item_discount_amount"))
+    discount += rupiah(amt.get("saver_delivery_discount_amount"))
+    return {
+        "subtotal": rupiah(amt.get("subtotal")),
+        "shipping": rupiah(amt.get("shipping_fee")),
+        "discount": discount,
+        "total": rupiah(amt.get("total_amount")),
+    }
+
+
+def pickup_time_ms(data):
+    try:
+        udo = ((data or {}).get("union_delivery") or {}).get("delivery_order") or {}
+        return int(udo.get("pickup_time") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def driver_eta_ms(data):
+    try:
+        udo = ((data or {}).get("union_delivery") or {}).get("delivery_order") or {}
+        return int(udo.get("driver_deliver_eta") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def estimate_driver_pos(data, order):
+    """Estimasi posisi driver (garis lurus resto -> tujuan) dari progres waktu
+    pickup -> ETA. Dipakai karena API share tidak memberi driver.location
+    (null di semua pantauan) — pin jadi bergerak mengikuti progres, bukan
+    diam di resto. Return (lat, lng) atau None."""
+    pk = store_loc(order)
+    dest = dest_loc(order)
+    if not pk or not dest:
+        return None
+    pt = pickup_time_ms(data)
+    eta = driver_eta_ms(data)
+    now = int(time.time() * 1000)
+    if not pt or not eta or eta <= pt or now < pt:
+        return None
+    frac = min(1.0, (now - pt) / (eta - pt))
+    return (pk[0] + (dest[0] - pk[0]) * frac,
+            pk[1] + (dest[1] - pk[1]) * frac)

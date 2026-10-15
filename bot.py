@@ -355,6 +355,29 @@ def expired_text(t):
     return "\n".join(s)
 
 
+def _rp(n):
+    return f"Rp{n:,}".replace(",", ".")
+
+
+def _shopee_dloc(d, order, drv, dname):
+    """(dloc, is_real, is_estimated): posisi driver untuk pin live.
+
+    API share tidak pernah memberi driver.location (null di semua pantauan),
+    jadi saat mengantar (430/431) posisi diestimasi dari progres waktu
+    pickup -> ETA agar pin bergerak mengikuti perjalanan; selain itu
+    fallback titik resto seperti web app."""
+    real = sp.driver_loc(drv)
+    if real:
+        return real, True, False
+    if sp.status_code(order) in sp.DELIVERY_STATES:
+        est = sp.estimate_driver_pos(d, order)
+        if est:
+            return est, False, True
+    if dname:
+        return sp.pickup_geo(d), False, False
+    return None, False, False
+
+
 def shopee_card_text(d, t):
     """Kartu status untuk pantauan ShopeeFood."""
     order = sp.order_of(d)
@@ -372,7 +395,21 @@ def shopee_card_text(d, t):
         lines.append(f"⏱ Estimasi tiba: {eta_s}")
     names = sp.item_names(order)
     n_items = len(order.get("items") or [])
-    if names:
+    items = sp.items_of(order)
+    if items:
+        lines.append("🧾 <b>Pesanan:</b>")
+        for it in items[:4]:
+            lines.append(f"• {esc(it['name'])} x{it['qty']} — {_rp(sp.rupiah(it['unit_price']))}")
+        if len(items) > 4:
+            lines.append(f"<i>+{len(items) - 4} item lainnya</i>")
+        amt = sp.amounts_of(order)
+        if amt["total"]:
+            pay = [f"Subtotal {_rp(amt['subtotal'])}", f"Ongkir {_rp(amt['shipping'])}"]
+            if amt["discount"]:
+                pay.append(f"Voucher -{_rp(amt['discount'])}")
+            lines.append(f"💰 {' · '.join(pay)}")
+            lines.append(f"   Total bayar: <b>{_rp(amt['total'])}</b>")
+    elif names:
         more = f" +{n_items - len(names)} lainnya" if n_items > len(names) else ""
         lines.append(f"🍜 {esc(', '.join(names))}{more}")
     drv = sp.driver_of(d)
@@ -391,11 +428,13 @@ def shopee_card_text(d, t):
                 wa = "62" + wa[1:]
             lines.append(f'📞 <a href="https://wa.me/{wa}">{esc(phone)}</a> '
                          f'<i>(ketuk untuk chat WA)</i>')
-    dloc = sp.driver_loc(drv) or (sp.pickup_geo(d) if dname else None)
+    dloc, dloc_real, dloc_est = _shopee_dloc(d, order, drv, dname)
     dest = sp.dest_loc(order)
     if dloc and dest:
         dist = haversine_km(dloc[0], dloc[1], dest[0], dest[1])
         lines.append(f"📏 Driver → tujuan: ±{fmt_dist(dist)} garis lurus")
+        if dloc_est:
+            lines.append("<i>📍 posisi driver perkiraan (API tidak memberi lokasi live)</i>")
         init = t.get("initial_dist_km")
         if init and init > 0.05 and st in sp.DELIVERY_STATES:
             lines.append(f"🗺️ Perjalanan: {progress_bar(1 - dist / init)}")
@@ -669,7 +708,7 @@ def start_shopee_tracking(s, chat_id, link):
     if r1.get("ok"):
         t["card_msg"] = r1["result"]["message_id"]
     _drv0 = sp.driver_of(d)
-    dloc = sp.driver_loc(_drv0) or (sp.pickup_geo(d) if sp.driver_name(_drv0) else None)
+    dloc, _, _ = _shopee_dloc(d, order, _drv0, sp.driver_name(_drv0))
     if dloc:
         r2 = tg.send_location(chat_id, dloc[0], dloc[1])
         if r2.get("ok"):
@@ -794,8 +833,7 @@ def poll_shopee_tracking(s, tid, t):
         t["notified_enroute"] = True
         send_html(chat_id, "🔔 Driver ShopeeFood sedang menuju lokasimu. 🟧")
 
-    dloc_real = sp.driver_loc(drv)
-    dloc = dloc_real or (sp.pickup_geo(d) if dname else None)
+    dloc, dloc_real, dloc_est = _shopee_dloc(d, order, drv, dname)
     dest = sp.dest_loc(order)
     dist = None
     if dloc and dest:
