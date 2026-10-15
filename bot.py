@@ -8,6 +8,8 @@ lalu memberi tahu saat driver jalan, sudah dekat, dan pesanan selesai.
 import json
 import os
 import re
+import sys
+import fcntl
 import time
 import html as htmlmod
 from collections import Counter
@@ -1208,6 +1210,15 @@ def handle_callback(s, cb):
 
 
 def main():
+    # Cegah dua instance berjalan bersamaan: Telegram menghentikan salah satu
+    # polling getUpdates (error 409) dan pesan bisa hilang ditelan instance lain.
+    # Lock dilepas otomatis saat proses mati.
+    lockf = open(os.path.join(BASE, "bot.lock"), "w")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another bot instance is already running; exiting", flush=True)
+        sys.exit(0)
     s = load_state()
     log("bot started")
     # resume: pastikan pesan kartu/live masih valid tidak dicek; cukup lanjutkan polling

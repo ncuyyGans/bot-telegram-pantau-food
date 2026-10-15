@@ -3,6 +3,8 @@ state.json
 history.json
 bot.pid
 bot.log
+bot.lock
+watchdog.lock
 
 # Python
 __pycache__/

@@ -2,6 +2,9 @@
 # Watchdog: pastikan bot pantau GrabFood selalu jalan. Dipanggil cron tiap 5 menit.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR" || exit 1
+# Serialisasi watchdog: cegah dua run watchdog overlap (check-then-start tidak atomik).
+exec 9>"$DIR/watchdog.lock"
+flock -n 9 || exit 0
 if [ -f bot.pid ]; then
   PID=$(cat bot.pid)
   # Pola ketat: cocok "python3 bot.py" (boleh dengan path), bukan "otpbot.py"
