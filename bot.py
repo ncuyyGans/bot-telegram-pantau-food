@@ -434,7 +434,7 @@ def shopee_card_text(d, t):
         dist = haversine_km(dloc[0], dloc[1], dest[0], dest[1])
         lines.append(f"📏 Driver → tujuan: ±{fmt_dist(dist)} garis lurus")
         if dloc_est:
-            lines.append("<i>📍 posisi driver perkiraan (API tidak memberi lokasi live)</i>")
+            lines.append("<i>📍 estimasi dari data Shopee (bukan lokasi live)</i>")
         init = t.get("initial_dist_km")
         if init and init > 0.05 and st in sp.DELIVERY_STATES:
             lines.append(f"🗺️ Perjalanan: {progress_bar(1 - dist / init)}")
@@ -707,12 +707,8 @@ def start_shopee_tracking(s, chat_id, link):
     r1 = send_html(chat_id, shopee_card_text(d, t), reply_markup=kb)
     if r1.get("ok"):
         t["card_msg"] = r1["result"]["message_id"]
-    _drv0 = sp.driver_of(d)
-    dloc, _, _ = _shopee_dloc(d, order, _drv0, sp.driver_name(_drv0))
-    if dloc:
-        r2 = tg.send_location(chat_id, dloc[0], dloc[1])
-        if r2.get("ok"):
-            t["live_msg"] = r2["result"]["message_id"]
+    # Live location ShopeeFood dihapus (permintaan user 2026-10-15): API share
+    # tidak memberi koordinat live driver. Progres cukup dari estimasi kartu.
     save_state(s)
     send_html(chat_id,
                     f"👀 Mulai memantau <b>{esc(merchant)}</b> (ShopeeFood). "
@@ -883,18 +879,11 @@ def poll_shopee_tracking(s, tid, t):
                             "— mungkin macet atau mampir sebentar.")
     t["last_state"] = st
 
-    # update live location
-    if dloc:
-        if t.get("live_msg"):
-            r = tg.edit_live_location(chat_id, t["live_msg"], dloc[0], dloc[1])
-            if not r.get("ok") and "live location" in str(r.get("description", "")).lower():
-                r2 = tg.send_location(chat_id, dloc[0], dloc[1])
-                if r2.get("ok"):
-                    t["live_msg"] = r2["result"]["message_id"]
-        else:
-            r2 = tg.send_location(chat_id, dloc[0], dloc[1])
-            if r2.get("ok"):
-                t["live_msg"] = r2["result"]["message_id"]
+    # Live location ShopeeFood dihapus (permintaan user 2026-10-15): API share
+    # tidak memberi koordinat live driver. Hapus pesan pin lama bila masih ada.
+    if t.get("live_msg"):
+        tg.delete_message(chat_id, t["live_msg"])
+        t["live_msg"] = None
     # update kartu
     if t.get("card_msg"):
         edit_html(chat_id, t["card_msg"], shopee_card_text(d, t),

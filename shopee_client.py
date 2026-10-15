@@ -28,6 +28,7 @@ STATUS_LABEL = {
     425: "dikonfirmasi",         # Reconfirmed
     430: "diambil driver",       # Picked
     431: "diantar driver",       # EnrouteDelivery
+    440: "tiba di tujuan",       # Delivered (teramati 2026-10-15)
 }
 # Fase driver membawa pesanan (boleh hitung progres + notifikasi dekat/macets)
 DELIVERY_STATES = {430, 431}

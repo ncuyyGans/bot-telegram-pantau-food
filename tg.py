@@ -118,6 +118,11 @@ def stop_live_location(chat_id, msg_id):
                {"chat_id": chat_id, "message_id": msg_id}, timeout=20)
 
 
+def delete_message(chat_id, msg_id):
+    return api("deleteMessage", {"chat_id": chat_id, "message_id": msg_id},
+               timeout=20)
+
+
 def reply_keyboard():
     return {"keyboard": [[{"text": "🛵 Lacak pesanan"}, {"text": "📋 Daftar pantauan"}],
                          [{"text": "📊 Statistik"}]],
