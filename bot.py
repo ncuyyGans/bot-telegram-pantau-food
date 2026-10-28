@@ -673,7 +673,7 @@ def start_shopee_tracking(s, chat_id, link):
     store = order.get("store") or {}
     dest = order.get("delivery_address") or {}
     merchant = store.get("name") or "-"
-    dropoff = ((dest.get("location") or {}).get("address") or "-")[:80]
+    dropoff = (dest.get("location") or {}).get("address") or "-"
     lo, hi = sp.eta_range(order)
     log(f"shopee link OK: order={order_id} status={st} store={merchant}")
     tt = {"platform": "shopee", "merchant": merchant, "dropoff": dropoff,

@@ -238,13 +238,36 @@ def fmt_rp(v):
 
 
 def eta_range(order):
-    """(min_ts, max_ts) estimasi tiba dalam detik epoch; (None, None) bila tak ada."""
+    """(min_ts, max_ts) estimasi tiba dalam detik epoch; (None, None) bila tak ada.
+
+    Pesanan terjadwal: bila jendela scheduled_delivery_* ada dan dimulai
+    setelah estimasi display, pakai jendela terjadwal — estimasi display
+    bisa basi (teramati 2026-10-28: display 10:26-10:36 padahal pesanan
+    dijadwalkan 13:00-13:30 dan masih status 300). Bila estimasi display
+    sudah lewat seluruhnya, pakai estimate_processing_time bila masih
+    di depan.
+    """
+    def _to_sec(v):
+        try:
+            v = int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+        return v // 1000 if v > 10 ** 12 else v
+
     d = order.get("display_estimate_delivered_time") or {}
-    try:
-        lo, hi = int(d.get("min") or 0), int(d.get("max") or 0)
-    except (TypeError, ValueError):
-        return None, None
-    return (lo // 1000) if lo > 0 else None, (hi // 1000) if hi > 0 else None
+    lo = _to_sec(d.get("min"))
+    hi = _to_sec(d.get("max"))
+    lo = lo if lo > 0 else None
+    hi = hi if hi > 0 else None
+    sched_lo = _to_sec(order.get("scheduled_delivery_start_time"))
+    sched_hi = _to_sec(order.get("scheduled_delivery_end_time"))
+    if sched_lo > 0 and sched_hi > 0 and (hi is None or sched_lo > hi):
+        return sched_lo, sched_hi
+    if hi is not None and hi < time.time():
+        proc = _to_sec(order.get("estimate_processing_time"))
+        if proc > time.time():
+            return proc, None
+    return lo, hi
 
 
 def item_names(order, limit=4):
